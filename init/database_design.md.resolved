@@ -1,0 +1,299 @@
+# Tài liệu Thiết kế Cơ sở Dữ liệu (Database Design Document)
+
+## 1. Tổng quan & Thiết kế Quyết định
+
+Tài liệu này cung cấp thiết kế chi tiết (Database Schema) cho hệ thống E-Learning, Từ điển ngôn ngữ ký hiệu, và Microlearning. Dựa trên danh sách thực thể đầu vào, một số thiết kế cấu trúc đã được chuẩn hóa như sau:
+
+> [!NOTE]
+> **Thiết kế Thừa kế & Thực thể con (Inheritance):**
+> Thực thể `Student` và `Teacher` được định nghĩa là kế thừa từ `User`. Trong CSDL quan hệ, điều này được áp dụng theo mô hình 1-1: Mỗi Student và Teacher sẽ lưu trữ một bản ghi với Khóa chính là `user_id` liên kết đến bảng `Users`, chứa các thông tin đặc thù của học sinh hoặc giáo viên. Vai trò chung được quản lý bởi bảng `Roles` và gán trong `Users`.
+
+> [!IMPORTANT]
+> **Xử lý các Thuộc tính gộp/Loại trừ (Metadata & Exclusion):**
+> - **MaterialTranscript**: Được xem là 01 thuộc tính (kiểu `JSON` hoặc `TEXT`) nằm trực tiếp trong bảng `LearningMaterial` do có quan hệ 1-1 ràng buộc vòng đời.
+> - **CourseVisibilityStatus**: Được tích hợp thành 01 cờ/trạng thái (kiểu `ENUM` hoặc `VARCHAR`) nằm trong bảng `GeneralCourse`.
+> - **CoursePermission**: ❌ Thực thể nằm *ngoài phạm vi nghiệp vụ*, nên đã lược bỏ khỏi CSDL. Hệ thống sẽ áp dụng quy tắc quyền mặc định.
+
+---
+
+## 2. Sơ đồ Thực thể Liên kết khái quát (ERD)
+
+Mô hình dữ liệu cơ bản thể hiện sự liên kết giữa các bảng mạch chính trong hệ thống:
+
+```mermaid
+erDiagram
+    Users ||--o{ UserProfiles : has
+    Roles ||--o{ Users : assigned_to
+    Users ||--o| Students : is_a
+    Users ||--o| Teachers : is_a
+    Users ||--o{ AuthenticationSessions : generates
+    
+    DictionariesCategory ||--o{ DictionaryEntries : contains
+    DictionaryEntries ||--o{ DictionaryVariations : has
+
+    GeneralCourseCategories ||--o{ GeneralCourses : groups
+    Teachers ||--o{ GeneralCourses : teaches
+    GeneralCourses ||--o{ CourseEnrollments : has
+    Students ||--o{ CourseEnrollments : enrolls
+    
+    GeneralCourses ||--o{ GeneralCourseModules : contains
+    GeneralCourseModules ||--o{ GeneralCourseLessons : contains
+    GeneralCourseLessons ||--o{ LearningMaterials : provides
+    GeneralCourseLessons ||--o{ Comments : has
+    Users ||--o{ Comments : writes
+
+    MicroLearningTopics ||--o{ MicroLearningUnits : contains
+    MicroLearningUnits ||--o{ MicroLearningLessons : contains
+    MicroLearningLessons ||--o{ MicroLearningLessonParts : contains
+    MicroLearningLessonParts ||--o{ MicroLearningQuestions : has
+```
+
+---
+
+## 3. Chi tiết Cấu trúc các bảng (Table Schema)
+
+### Hệ thống Quản lý Người dùng & Xác thực (User Management)
+
+#### `roles` (Vai trò)
+| Cột | Kiểu Dữ liệu | Ràng buộc | Ràng buộc / Khóa Ngoại | Mô tả |
+| :--- | :--- | :--- | :--- | :--- |
+| `role_id` | INT | PK, Auto Increment | | Khóa chính |
+| `role_name` | VARCHAR(50) | NOT NULL, UNIQUE | | Tên vai trò (VD: Admin, Teacher, Student) |
+
+#### `users` (Người dùng)
+| Cột | Kiểu Dữ liệu | Ràng buộc | Ràng buộc / Khóa Ngoại | Mô tả |
+| :--- | :--- | :--- | :--- | :--- |
+| `user_id` | UUID | PK | | Khóa chính định danh User |
+| `username` | VARCHAR(50) | NOT NULL, UNIQUE | | Tên tài khoản đăng nhập |
+| `password_hash` | VARCHAR(255) | NOT NULL | | Mật khẩu đã được mã hóa |
+| `email` | VARCHAR(100) | UNIQUE | | Email liên hệ/đăng nhập |
+| `role_id` | INT | NOT NULL | FK -> `roles.role_id` | Định danh vai trò |
+| `created_at` | TIMESTAMP | DEFAULT NOW() | | Ngày tạo tài khoản |
+
+#### `user_profiles` (Hồ sơ Người dùng)
+| Cột | Kiểu Dữ liệu | Ràng buộc | Ràng buộc / Khóa Ngoại | Mô tả |
+| :--- | :--- | :--- | :--- | :--- |
+| `profile_id` | UUID | PK | | |
+| `user_id` | UUID | NOT NULL | FK -> `users.user_id` | Thuộc về User nào |
+| `full_name` | VARCHAR(100) | NOT NULL | | Tên điền đầy đủ |
+| `avatar_url` | VARCHAR(255) | NULL | | Link ảnh đại diện |
+| `phone_number`| VARCHAR(20) | NULL | | Số điện thoại |
+| `date_of_birth`| DATE | NULL | | Ngày sinh |
+
+#### `students` (Học sinh)
+| Cột | Kiểu Dữ liệu | Ràng buộc | Ràng buộc / Khóa Ngoại | Mô tả |
+| :--- | :--- | :--- | :--- | :--- |
+| `user_id` | UUID | PK | FK -> `users.user_id` | Mở rộng 1-1 từ bảng User |
+| `grade_level` | VARCHAR(50) | NULL | | Khối lớp / Trình độ |
+| `school_name` | VARCHAR(150) | NULL | | Tên trường theo học |
+
+#### `teachers` (Giáo viên)
+| Cột | Kiểu Dữ liệu | Ràng buộc | Ràng buộc / Khóa Ngoại | Mô tả |
+| :--- | :--- | :--- | :--- | :--- |
+| `user_id` | UUID | PK | FK -> `users.user_id` | Mở rộng 1-1 từ bảng User |
+| `bio` | TEXT | NULL | | Giới thiệu giáo viên |
+| `department` | VARCHAR(100) | NULL | | Bộ môn / Đơn vị công tác |
+
+#### `authentication_sessions` (Phiên đăng nhập & OTP)
+| Cột | Kiểu Dữ liệu | Ràng buộc | Ràng buộc / Khóa Ngoại | Mô tả |
+| :--- | :--- | :--- | :--- | :--- |
+| `session_id` | UUID | PK | | |
+| `user_id` | UUID | NOT NULL | FK -> `users.user_id` | API / Trình duyệt truy cập |
+| `session_key` | VARCHAR(255) | NOT NULL | | Token truy cập |
+| `otp_code` | VARCHAR(10) | NULL | | Mã OTP gửi xác thực (nếu có) |
+| `expires_at` | TIMESTAMP | NOT NULL | | Thời gian hết hạn |
+| `created_at` | TIMESTAMP | DEFAULT NOW() | | Ngày sinh session |
+
+---
+
+### Từ điển Ngôn ngữ Ký hiệu (Sign Language Dictionary)
+
+#### `dictionary_categories` (Danh mục Từ điển)
+| Cột | Kiểu Dữ liệu | Ràng buộc | Ràng buộc / Khóa Ngoại | Mô tả |
+| :--- | :--- | :--- | :--- | :--- |
+| `category_id` | INT | PK, Auto Increment | | |
+| `name` | VARCHAR(100) | NOT NULL | | Tên danh mục/chủ đề |
+| `description` | TEXT | NULL | | Mô tả danh mục |
+
+#### `dictionary_entries` (Mục Từ Từ điển)
+| Cột | Kiểu Dữ liệu | Ràng buộc | Ràng buộc / Khóa Ngoại | Mô tả |
+| :--- | :--- | :--- | :--- | :--- |
+| `entry_id` | UUID | PK | | |
+| `category_id` | INT | NOT NULL | FK -> `dictionary_categories(category_id)`| Chủ đề của từ khóa |
+| `word` | VARCHAR(100) | NOT NULL | | Mục từ/Từ vựng |
+| `meaning` | TEXT | NOT NULL | | Giải nghĩa của từ |
+
+#### `dictionary_variations` (Biến thể Ký hiệu)
+| Cột | Kiểu Dữ liệu | Ràng buộc | Ràng buộc / Khóa Ngoại | Mô tả |
+| :--- | :--- | :--- | :--- | :--- |
+| `variation_id`| UUID | PK | | |
+| `entry_id` | UUID | NOT NULL | FK -> `dictionary_entries(entry_id)` | Của từ vựng nào |
+| `region` | VARCHAR(100) | NULL | | Phương ngữ / Vùng miền |
+| `video_url` | VARCHAR(255) | NOT NULL | | Nguồn video minh họa ngôn ngữ ký hiệu |
+| `description` | TEXT | NULL | | Hướng dẫn biểu diễn, lưu ý biến thể |
+
+---
+
+### Khóa học Văn hóa (General Course)
+
+#### `general_course_categories` (Thể loại khóa học)
+| Cột | Kiểu Dữ liệu | Ràng buộc | Ràng buộc / Khóa Ngoại | Mô tả |
+| :--- | :--- | :--- | :--- | :--- |
+| `category_id` | INT | PK, Auto Inc | | |
+| `name` | VARCHAR(100) | NOT NULL | | Tên thể loại khóa học |
+
+#### `general_courses` (Khóa học)
+| Cột | Kiểu Dữ liệu | Ràng buộc | Ràng buộc / Khóa Ngoại | Mô tả |
+| :--- | :--- | :--- | :--- | :--- |
+| `course_id` | UUID | PK | | |
+| `teacher_id` | UUID | NOT NULL | FK -> `teachers.user_id` | Giáo viên phụ trách giảng dạy |
+| `category_id` | INT | NOT NULL | FK -> `general_course_categories...`| Thể loại khóa |
+| `title` | VARCHAR(255) | NOT NULL | | Tựa khóa học |
+| `description` | TEXT | NULL | | Mô tả nội dung |
+| `visibility_status`| VARCHAR(20)| DEFAULT 'DRAFT' | | **[THUỘC TÍNH]**: DRAFT, PUBLISHED, ARCHIVED |
+
+#### `general_course_modules` (Mô-đun Khóa học)
+| Cột | Kiểu Dữ liệu | Ràng buộc | Ràng buộc / Khóa Ngoại | Mô tả |
+| :--- | :--- | :--- | :--- | :--- |
+| `module_id` | UUID | PK | | |
+| `course_id` | UUID | NOT NULL | FK -> `general_courses.course_id`| |
+| `title` | VARCHAR(255) | NOT NULL | | Tên mô đun |
+| `order_index` | INT | NOT NULL | | Thứ tự sắp xếp |
+
+#### `general_course_lessons` (Bài học)
+| Cột | Kiểu Dữ liệu | Ràng buộc | Ràng buộc / Khóa Ngoại | Mô tả |
+| :--- | :--- | :--- | :--- | :--- |
+| `lesson_id` | UUID | PK | | |
+| `module_id` | UUID | NOT NULL | FK -> `general_course_modules...`| |
+| `title` | VARCHAR(255) | NOT NULL | | Tên bài học |
+| `order_index` | INT | NOT NULL | | Giúp xếp thứ tự bài học trong mô đun |
+
+#### `learning_materials` (Tài liệu Bài học)
+| Cột | Kiểu Dữ liệu | Ràng buộc | Ràng buộc / Khóa Ngoại | Mô tả |
+| :--- | :--- | :--- | :--- | :--- |
+| `material_id` | UUID | PK | | |
+| `lesson_id` | UUID | NOT NULL | FK -> `general_course_lessons...`| |
+| `title` | VARCHAR(255) | NOT NULL | | Tên tài liệu |
+| `content_url` | VARCHAR(255) | NOT NULL | | Link file/video tài liệu chi tiết |
+| `material_transcript`| JSON/TEXT | NULL | | **[THUỘC TÍNH]**: Nội dung timeline, file sub |
+
+#### `course_enrollments` (Đăng ký Học)
+| Cột | Kiểu Dữ liệu | Ràng buộc | Ràng buộc / Khóa Ngoại | Mô tả |
+| :--- | :--- | :--- | :--- | :--- |
+| `enrollment_id`| UUID | PK | | |
+| `student_id` | UUID | NOT NULL | FK -> `students.user_id` | Ai đang học |
+| `course_id` | UUID | NOT NULL | FK -> `general_courses.course_id`| Học khóa nào |
+| `progress` | DECIMAL(5,2) | DEFAULT 0.00 | | Tổng tiến độ % khóa học |
+| `enrolled_at` | TIMESTAMP | DEFAULT NOW() | | Đăng ký từ khi nào |
+
+#### `comments` (Bình luận)
+| Cột | Kiểu Dữ liệu | Ràng buộc | Ràng buộc / Khóa Ngoại | Mô tả |
+| :--- | :--- | :--- | :--- | :--- |
+| `comment_id` | UUID | PK | | |
+| `lesson_id` | UUID | NOT NULL | FK -> `general_course_lessons...`| Thảo luận trên lesson nào |
+| `user_id` | UUID | NOT NULL | FK -> `users.user_id` | Ai đăng bình luận |
+| `content` | TEXT | NOT NULL | | Nội dung trao đổi |
+| `created_at` | TIMESTAMP | DEFAULT NOW() | | |
+
+---
+
+### Chế độ Microlearning (Học tập Siêu nhỏ)
+
+#### `microlearning_topics` (Chủ đề Microlearning)
+| Cột | Kiểu Dữ liệu | Ràng buộc | Ràng buộc / Khóa Ngoại | Mô tả |
+| :--- | :--- | :--- | :--- | :--- |
+| `topic_id` | INT | PK, Auto Inc | | |
+| `title` | VARCHAR(150) | NOT NULL | | Tên Chủ đề |
+| `description` | TEXT | NULL | | |
+
+#### `microlearning_units` (Phần học Microlearning)
+| Cột | Kiểu Dữ liệu | Ràng buộc | Ràng buộc / Khóa Ngoại | Mô tả |
+| :--- | :--- | :--- | :--- | :--- |
+| `unit_id` | UUID | PK | | |
+| `topic_id` | INT | NOT NULL | FK -> `microlearning_topics...`| |
+| `title` | VARCHAR(255) | NOT NULL | | |
+| `order_index` | INT | NOT NULL | | Thứ tự xuất hiện trong hệ thống UI |
+
+#### `microlearning_lessons` (Bài học Microlearning)
+| Cột | Kiểu Dữ liệu | Ràng buộc | Ràng buộc / Khóa Ngoại | Mô tả |
+| :--- | :--- | :--- | :--- | :--- |
+| `lesson_id` | UUID | PK | | |
+| `unit_id` | UUID | NOT NULL | FK -> `microlearning_units...`| |
+| `title` | VARCHAR(255) | NOT NULL | | Cụm bài học khái quát |
+| `order_index` | INT | NOT NULL | | |
+
+#### `microlearning_lesson_parts` (Chi tiết part Microlearning)
+| Cột | Kiểu Dữ liệu | Ràng buộc | Ràng buộc / Khóa Ngoại | Mô tả |
+| :--- | :--- | :--- | :--- | :--- |
+| `part_id` | UUID | PK | | |
+| `lesson_id` | UUID | NOT NULL | FK -> `microlearning_lessons...`| |
+| `title` | VARCHAR(255) | NULL | | |
+| `part_type` | VARCHAR(50) | NOT NULL | | Thể loại (VIDEO, TEXT, QUIZ) |
+| `content` | TEXT | NULL | | Nội dung của part (hoặc video URL) |
+| `order_index` | INT | NOT NULL | | |
+
+#### `microlearning_questions` (Câu hỏi Quiz Microlearning)
+| Cột | Kiểu Dữ liệu | Ràng buộc | Ràng buộc / Khóa Ngoại | Mô tả |
+| :--- | :--- | :--- | :--- | :--- |
+| `question_id` | UUID | PK | | |
+| `part_id` | UUID | NOT NULL | FK -> `microlearning_lesson_parts`| Trực thuộc lesson part ở trên |
+| `question_text`| TEXT | NOT NULL | | Đề bài câu hỏi |
+| `question_type`| VARCHAR(20) | NOT NULL | | MC, FILL_IN_BLANK, v.v. |
+| `options_json` | JSON | NOT NULL | | Mảng lưu trữ các đáp án trắc nghiệm |
+| `correct_answer`| VARCHAR(255) | NOT NULL | | Đáp án đúng |
+
+---
+
+### Gamification & Tương tác (Gamification & Engagements)
+
+#### `student_streaks` (Sự kiện học tập liên tục)
+| Cột | Kiểu Dữ liệu | Ràng buộc | Ràng buộc / Khóa Ngoại | Mô tả |
+| :--- | :--- | :--- | :--- | :--- |
+| `streak_id` | UUID | PK | | |
+| `student_id` | UUID | NOT NULL, UNIQUE| FK -> `students.user_id`| |
+| `current_streak`| INT | DEFAULT 0 | | Số ngày học liên tục vạn tại |
+| `highest_streak`| INT | DEFAULT 0 | | Kỷ lục đã đạt được |
+| `last_activity_date`| DATE | NULL | | Ngày tương tác gần nhất |
+
+#### `achievements` (Danh sách Thành tựu/Huy hiệu)
+| Cột | Kiểu Dữ liệu | Ràng buộc | Ràng buộc / Khóa Ngoại | Mô tả |
+| :--- | :--- | :--- | :--- | :--- |
+| `achievement_id`| INT | PK, Auto Inc | | |
+| `title` | VARCHAR(100) | NOT NULL | | Tên Huy hiệu (VD: 3 Days Streak) |
+| `description` | TEXT | NOT NULL | | |
+| `icon_url` | VARCHAR(255) | NULL | | Hình ảnh huy chương UI |
+
+#### `user_achievements` (Thành tựu của người dùng)
+| Cột | Kiểu Dữ liệu | Ràng buộc | Ràng buộc / Khóa Ngoại | Mô tả |
+| :--- | :--- | :--- | :--- | :--- |
+| `id` | UUID | PK | | Bảng liên kết chéo ghi lại lịch sử|
+| `user_id` | UUID | NOT NULL | FK -> `users.user_id` | |
+| `achievement_id`| INT | NOT NULL | FK -> `achievements...`| |
+| `earned_at` | TIMESTAMP | DEFAULT NOW() | | Ngày nhận Thành tích |
+
+#### `user_feedbacks` (Phản hồi của học viên về AI/Hệ thống)
+| Cột | Kiểu Dữ liệu | Ràng buộc | Ràng buộc / Khóa Ngoại | Mô tả |
+| :--- | :--- | :--- | :--- | :--- |
+| `feedback_id` | UUID | PK | | |
+| `user_id` | UUID | NOT NULL | FK -> `users.user_id` | Ai cung cấp feedback |
+| `rating` | INT | NULL | | Thang điểm đánh giá |
+| `feedback_text`| TEXT | NULL | | Nội dung text |
+| `context` | VARCHAR(255) | NULL | | Lưu vết nội dung AI phản hồi đã sinh |
+| `created_at` | TIMESTAMP | DEFAULT NOW() | | |
+
+#### `notification_users` (Thông báo cá nhân)
+| Cột | Kiểu Dữ liệu | Ràng buộc | Ràng buộc / Khóa Ngoại | Mô tả |
+| :--- | :--- | :--- | :--- | :--- |
+| `notification_id`| UUID | PK | | |
+| `user_id` | UUID | NOT NULL | FK -> `users.user_id` | Ai được nhận thông báo |
+| `title` | VARCHAR(255) | NOT NULL | | Tiêu đề chuông báo |
+| `message` | TEXT | NOT NULL | | Chi tiết chuông báo |
+| `is_read` | BOOLEAN | DEFAULT FALSE | | Trạng thái chưa đọc / đã lướt |
+| `created_at` | TIMESTAMP | DEFAULT NOW() | | |
+
+---
+
+## 4. Kế hoạch xác minh (Verification Plan)
+*(Dùng để User kiểm duyệt trong quá trình Planning, do không có implementation logic backend/frontend)*
+- **User Verification:** User sẽ kiểm tra sơ đồ ERD trực quan hóa xem có đúng nghiệp vụ thiết kế.
+- **Relational Integrity Verification:** Khi được xác nhận, các file migration (.sql, .prisma, hoặc code ORM tương ứng) có thể được sinh an toàn từ bản spec này. Từng Foreign Key đã đảm bảo có cột ràng buộc.
