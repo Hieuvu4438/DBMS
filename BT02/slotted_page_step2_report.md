@@ -1,49 +1,55 @@
-# BÁO CÁO CHUYÊN SÂU: BƯỚC 2 - QUẢN LÝ XOÁ VÀ DỒN PHÂN MẢNH TRANG (DELETE & COMPACT)
+# BÁO CÁO KỸ THUẬT CHUYÊN SÂU: BƯỚC 2 - QUẢN LÝ XOÁ VÀ DỒN PHÂN MẢNH TRANG
 **(Dựa trên phân tích mã nguồn `slotted_page_step2.py`)**
 
-Tiếp nối lý thuyết tại Bước 1, mã nguồn `slotted_page_step2.py` nâng cấp hệ thống Slotted Page cơ bản để giải quyết hai vấn đề nảy sinh trong thực tế thay đổi dữ liệu: **Xóa bản ghi (Deletion)** và **Dồn trang - Xử lý phân mảnh (Compact/Defragmentation)**.
+Tiếp nối nền tảng lưu biến thiên (Variable-Length) tại Bước 1, mã nguồn `slotted_page_step2.py` giải quyết lỗ hổng nan giải nhất trong việc quản trị dữ liệu thực tế tại ổ đĩa: **Vấn đề phân mảnh khi thay đổi Dữ liệu**, bằng cách ứng dụng cơ chế **Lazy Deletion** (Xóa mềm) và **Compaction** (Dồn phân mảnh không gian O(N)).
 
 ---
 
 ## 1. CƠ CHẾ XÓA MỀM (LAZY DELETION)
 
-### Tại sao không xóa thật ngay lập tức?
-Khi xóa 1 Record nằm ở giữa Page, nếu làm theo kiểu mảng thông thường: Máy tính sẽ phải dời tất cả phần dữ liệu nằm bên trên tụt xuống dưới. Tốc độ sẽ vô cùng chậm (độ phức tạp O(N)). 
+### 1.1 Khó khăn của "Xóa Cứng" trên không gian Đĩa
+Giả sử bản ghi $A$ (dài $800$ bytes) nằm giữa Page. Nếu tiến hành dỡ bỏ ngay lập tức (Hard Deletion), DBMS sẽ phải lấp vào "khoảng trống vật lý" bằng cách xê dịch toàn bộ khối bản ghi ở trên xuống. Nếu thao tác này được thực hiện tức thì trên một ổ cứng từ tính chậm chạp (Disk I/O), độ trễ sẽ khiến DBMS tắc nghẽn vô hạn. Chi phí thời gian sẽ là $O(N)$ trong đó $N$ là lượng dữ liệu phải chép dời.
 
-### Giải pháp kỹ thuật trong code:
-*   Mã nguồn dùng kỹ thuật **Xóa mềm (Lazy Deletion)**.
-*   Thay vì đụng chạm vào 100~500 bytes của Record trong `Data Area`, DBMS chỉ cần trèo lên khu vực thẻ nhớ `Slot Directory` dài 4 bytes.
-*   Trong Slot Directory chèn số `0xFFFF` (giá trị 65535, đại diện cho chỉ số `-1`) đè lên con số Offset cũ.
-*   **Chi phí:** Thời gian cực nhanh O(1).
-*   **Hậu quả:** Khối dữ liệu thực sự (bản ghi A chẳng hạn) vẫn còn chình ình nằm nguyên ở đáy trang. Nó đã trở thành một cục "Lỗ hổng không gian chết" (Fragmentation). Cục rỗng này nằm chặn giữa nên ta không thể đút bản ghi mới vào khoảng hở (Slotted Page yêu cầu vùng `Contiguous Space` - không gian liên tục).
-
----
-
-## 2. QUỸ ĐẠO DỒN BỘ NHỚ (COMPACTION / DEFRAGMENTATION)
-
-Để quét sạch các "Lỗ hổng không gian chết", DBMS phải tiến hành thuật toán "Dọn dẹp mảng" gọi là `compact_page()`. Tác vụ này gây tốn CPU vì phải sao chép dữ liệu, nên nó chỉ được gọi khi CSDL có yêu cầu chèn nhưng Page báo lỗi "Hết dung lượng liên tục".
-
-### Luồng xử lý kỹ thuật thuật toán Compact:
-1.  **Lọc dữ liệu:** Quét qua Slot Directory. Với những slot có bù trừ Offset ≠ `0xFFFF` (Slot còn sống), copy bọc tạm cục bytes đó vào bộ nhớ Ram đệm (Buffer).
-2.  **Khởi tạo lại mảng:** Làm sạch phần đáy của 4096 bytes gốc (Data Area được quy về số 0x00).
-3.  **Nạp lại từng phần:** Quét vòng lặp đổ lần lượt các Record còn sống ở bước 1 vào lại từ đáy Page đẩy ngược lên. Bây giờ chúng sẽ xếp hạng "khít rịt" với nhau, các "lỗ hổng" đã biến mất, dồn khoảng trống lớn lên đầu trang (Tăng bộ `Contiguous Free Space`).
-4.  **Cập nhật Thẻ Bài Slot (QUAN TRỌNG NHẤT):** Vị trí mới của bản ghi C khi bị đẩy sát bản ghi A sẽ bị thay đổi thông số lưu vật lý (`Offset`). DBMS sẽ cập nhật `Offset thẻ từ` cho `Slot` của bản ghi C.
+### 1.2 Giải Pháp Lazy Deletion (Xóa Mềm)
+Thuật toán ưu tiên thay đổi phần thẻ mục (Meta-Data) trên đầu trang và bỏ mặc lại khối Storage Payload thực sự.
+- **Tiến trình vật lý:** Truy xuất đến `Slot Entry #K` trong *Slot Directory* chạy trong vùng offset: $Pos_{slot} = 12 + K \times 4$
+- **Hành động can thiệp toán tử:** Chèn đè giá trị đặc biệt $0xFFFF$ ($65535$) vào vị trí $Offset_{k}$ của mục lục, bảo lưu nguyên $Length_{K}$ gốc. Ghi đè vào mảng MRAM: `_write_slot(slot_id, DELETED_MARKER, length)`.
+- **Hệ quả của O(1):** Quá trình mất đúng phân nửa $1 \mu s$, bản ghi "như đã biến mất" trước các API truy vấn của người dùng. 
+- **The Fragmentation Tax (Thuế Phân Mảnh):** Vùng payload thực sự ở dưới cùng vẫn chưa được xóa, dẫn tới một "khoảng hổng bộ nhớ" không thể chạm tới xuất hiện, có diện tích bằng $Length_{k}$ (gọi là External Fragmentation). Nếu không gian liền mạch (Contiguous) bị nén quá nhỏ, mặc cho tổng không gian tổng cực kỳ rộng rãi, `Insert` vẫn sẽ thất bại.
 
 ---
 
-## 3. VAI TRÒ CỦA INDIRECTION KHI DỒN TRANG
+## 2. QUỸ ĐẠO TOÁN HỌC: CÔNG THỨC KHÔNG GIAN BỘ NHỚ
 
-Điểm kỳ diệu nằm ở bước Update thẻ Slot: **Chỉ có Offset (Vị trí đệm RAM) thay đổi, nhưng số thứ tự Slot ID không hề bị thay thế.**
+Thuật toán giờ đây phải giám sát hai thông số không gian độc lập:
 
-*   Giả sử: Bản ghi C lúc khởi tạo là `Slot ID: 3`, nằm ở `Offset: 3400`. Khi có Lệnh dồn trang, Bản Ghi C bị kéo tụt xuống `Offset: 3800` để ép lỗ hổng lấp khoảng trống. `Slot ID: 3` của C không bao giờ bị giáng chức hay mất vị thế. Bản thân `Slot ID: 3` nằm ở Directory chỉ đổi thẻ lưu nháp giá trị bù trừ.
-*   Bảo Vệ Tính Vẹn Toàn Của Index CSDL: Bên ngoài Page nọ có "Cây tìm kiếm B-Tree", nó luôn được lưu trỏ đến toạ độ `Page: X, Slot: 3`. Nếu hàm Compaction thay đổi chỉ số Slot gốc, cây B-Tree sẽ chết và đứt gãy mạch dẫn. Cơ chế gián tiếp (Indirection) cứu hệ thống khỏi cảnh ngộ đó.
+1. **Khối lượng Rỗng Tịnh Tiến ($Space_{Contiguous}$):** Là phần trắng xuyên suốt liên tục, tính từ rìa của thẻ định danh Slot tới chóp của Payload Data Area.
+   $$Space_{Contiguous} = Ptr_{free} - End_{SlotDir} - SlotSize$$
+   *(Khoảng này được dùng cho lệnh Insert gốc)*
+
+2. **Khối lượng Trống Khả Dụng Tổng Thể ($Space_{Total}$):** Là sức chứa "Lý Thuyết" sau khi ép bay mọi rác tàn dư bị xóa (Fragments).
+   $$Space_{Total} = Space_{Contiguous} + \sum_{k=0}^{N_{slots}} (Length_k \text{ nếu } Offset_k = 0xFFFF)$$
+   *(Hàm Insert kiểm tra nếu $Length_{NewRecord} \le Space_{Total}$ và $> Space_{Contiguous}$ có nghĩa là Page vẫn Đủ sức chứa, nhưng phải chạy Compact!)*
 
 ---
 
-## 4. KHÁI NIỆM "TOTAL FREE SPACE" VS "CONTIGUOUS FREE SPACE"
+## 3. THUẬT TOÁN DEFRAGMENTATION (COMPACTION / DỒN TRANG)
 
-Trong quá trình bảo trì Trang, DBMS liên tục kiểm tra 2 khía cạnh thể tích:
-*   `Total Free Space`: Bằng tổng những Lỗ Hổng cộng lại với Không Gian Trống Liên Hiện Có. Đo rẽ bằng con mắt lý thuyết nếu dồn lại thì trống bao nhiêu.
-*   `Contiguous Free Space`: Khoảng xanh liên tục 1 khối ở giữa Page. Con số này mới là trọng tâm cho thao tác `Insert`.
+Quá trình `compact_page()` là một sự tái sinh toàn diện bộ nhớ của Page hiện tại mô phỏng dọn ổ cứng.
 
-**Ví dụ:** `Total space = 100 Bytes` nhưng `Contiguous space = 30 Bytes` (Bị che mất do phân mảnh lỗ hổng 70 Bytes ở phía dưới). CSDL khi có nhu cầu chèn 50 byte vào, lúc này nó gặp tình trạng "Không gian liên tục quá nhỏ nhưng Không gian rỗng sau dồn thì chứa đủ". Do vậy nó sẽ kích hoạt quá trình gọi hàm dồn `compact_page()` xử lý rồi mới nhét 50 Bytes xuống.
+### 3.1 Quy trình O(N) Array Coalesce
+1. **Extraction (Trích xuất các Bản ghi còn Sống):** Duyệt trọn vòng lặp Mảng Slot Directory ($k=0$ đến $slot\_count$). Lưu Payload của các thẻ có $Offset \neq 0xFFFF$ vào một Array Cache đệm tậm thời trong RAM.
+2. **Purge (Tẩy uế trang đĩa vật lý):** Quét toàn bộ khối vùng $End_{SlotDir}$ đến giới hạn $4096$ byte về dải $0x00$ theo hệ $XOR$.
+3. **Restoration (Trám trần từ đáy lên):** Quy chiếu con trỏ đẩy chéo từ đáy $WritePtr = 4096$. Bóc khối RAM từ Cache.
+   Tính lại giới hạn chèn mới cho vòng lặp:
+   $$Offset_{new\_i} = WritePtr - Length_{i}$$
+   Thả vùng block Bytes vào đúng $Offset_{new\_i}$, sau đó gạt $WritePtr = Offset_{new\_i}$.
+4. **Relinking (Sửa đổi Bảng Định Danh O(1)):** Hệ thống chèn giá trị $Offset_{new\_i}$ ngược lại vào vùng Metadata của $Slot\_id$. Các bản ghi Delete thì bị cướp dời thông số vùng nhớ lưu rỗng bằng 0 (`Length_k = 0`).
+
+### 3.2 Hạt nhân Thiết kế: ĐỊNH LUẬT INDIRECTION & CON TRỎ MỒ CÔI
+Một trang đĩa không nằm cô lập mà được gắn kết với hàng tỷ nhánh trỏ từ các cấu trúc Cây **B-Tree** hoặc **Khóa ngoại (Foreign Key)**. 
+Nếu khi Defragmentation, ta phá hủy số hiệu dòng của Record (Thay $Slot\_id=3$ thành $Slot\_id=1$) để "ngay ngắn", hàng ngàn Cây Index tham chiếu tọa độ ảo cũ đó sẽ rơi vào hội chứng phân ly (**Dangling Pointer**) $\rightarrow$ Ngưng sập hoàn toàn Tín Tâm của Database.
+
+**Sự kì diệu của thiết kế Slotted:**
+- Tọa độ BĐS bên ngoài là Tuple `(Page_ID, Slot_ID)`.
+- Hàm Compaction đẩy văng vật lý Dòng dữ liệu từ $Offset = 3400$ tuột thẳng xuống $Offset = 3800$, nhưng **$Slot\_ID$ ở mục lục Header không hề biến đổi**. Chỉ có số định danh trỏ bên trong thay thế. Khối bộ nhớ ngoài luồng hoàn toàn "Mù thông tin" về sự dịch chuyển vật lý nhưng luôn tìm được Data nhờ sự đóng đè Proxy Indirection này.

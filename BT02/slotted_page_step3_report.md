@@ -1,58 +1,59 @@
-# BÁO CÁO CHUYÊN SÂU: BƯỚC 3 - QUẢN LÝ HEAP FILE VÀ NẠP DỮ LIỆU ĐẠI TRÀ (BULK LOAD)
+# BÁO CÁO KỸ THUẬT CHUYÊN SÂU: BƯỚC 3 - QUẢN LÝ HEAP FILE VÀ DATA STREAMING
 **(Dựa trên phân tích mã nguồn `slotted_page_step3.py`)**
 
-Sau khi đã tạo được lõi quản lý một Page đơn rẻ rách (4KB), `slotted_page_step3.py` giải quyết bài toán lớn hơn rất nhiều: **"Làm sao kiểm soát 500,000 tới Hàng Triệu Page kết hợp thành một file Database hoàn chỉnh?"**. Kiến trúc Cấu trúc File đơn giản nhất được sử dụng ở đây mang tên là **Heap File**.
+Hệ thống bước 3 nâng tầm tư duy lưu trữ từ việc quản trị cục diện 1 Block $4KB$ rời rạc tới việc vận hành một kho liên khối khổng lồ (Dataset $500.000+$ records) thông qua kiến trúc gốc nguyên sinh của Storage: **Heap File Manager**.
 
 ---
 
-## 1. MÔ BÌNH HEAP FILE QUẢN LÝ (HEAP FILE MANAGER)
+## 1. MÔ HÌNH VẬT LÝ HEAP FILE MANAGER
 
-*Heap File* là định dạng lưu vứt mọi thứ vào cơ sở dữ liệu khi hệ thống chưa được đánh chỉ mục. 
-Bản chất của `HeapFileManager`: Chèn mọi thứ tuần tự. Khi đủ sức chứa nó ghi tiếp file và cấp Trang kế tiếp.
+### 1.1 Cấu trúc mảng Page tuần tự
+"Heap File" (Tập tin đống) là kiến trúc lưu dữ liệu nguyên thủy khi phân tích DBMS chưa có chỉ mục phức tạp. Trong thuật toán mô phỏng này, hàng ngàn đối tượng `SlottedPage` sẽ được xả tuần tự, san sát nhau thành một File Nhị Phân dung lượng khổng lồ.
 
-### Cấu trúc mô phỏng trên đĩa cứng:
-Kho dữ liệu được lưu dưới dạng binary file (`database.db`).
 ```text
-Offset 0         Offset 4096      Offset 8192      Offset ...
-┌────────────────┬────────────────┬────────────────┬─────────┐
-│     Page 0     │     Page 1     │     Page 2     │  ...    │
-│    (4096 B)    │    (4096 B)    │    (4096 B)    │         │
-└────────────────┴────────────────┴────────────────┴─────────┘
+Offset đĩa: 0        4096      8192      12288
+            ┌────────┬────────┬────────┬────────┬───...
+            │ Page 0 │ Page 1 │ Page 2 │ Page 3 │
+            │ (4KB)  │ (4KB)  │ (4KB)  │ (4KB)  │
+            └────────┴────────┴────────┴────────┴───...
 ```
-Bởi vì mỗi trang luôn dài chuẩn 4096 byte, người ta dễ dàng dùng phép nhân để "nhảy" đến một trang bất kỳ. 
-Khi CSDL thông báo `FETCH PAGE = 2`, Hệ thống I/O ổ cứng sẽ xích tới độ dài con trỏ chép `2 * 4096 = 8192`. Tốc độ nhảy nhanh như chớp mồi (O(1)). Cả triệu file kết thúc nối tiếp nhau dính lấp.
+- **Phương trình Địa chỉ ổ cứng Sector O(1):**
+Khi CSDL nhận Tuple Record Pointer báo $PageID = X$, hệ thống bỏ qua việc quét tệp file theo kiểu con người (File stream), ngắt thẳng bộ xử lý I/O truy hồi vào toạ độ vật lý phần cứng tuyệt đối:
+$$Disk\_Offset = PageID \times PAGE\_SIZE = X \times 4096$$
+
+### 1.2 Bất Toán Insert Tuyến Tính Amortized O(1)
+Luồng thao tác Thêm Bản ghi Của Heap khá bạo ngược:
+1. Đọc trang vương vấn cuối cùng (Biết trước nhờ lưu metadata số Page của Header).
+2. Xả Payload data vào. Nếu thừa sức chứa, gọi Routine Slot Insert ở (Bước 1/2) $\rightarrow O(1)$.
+3. Nếu hết Contiguous, chạy Compact (Bước 2).
+4. Nếu Compact rồi vẫn hết mảng vùng rỗng biên $\rightarrow$ Kêu gọi HĐH cấp 4096 Byte mới (Tạo $Page_{last+1}$) $\rightarrow$ Ghi tiếp nhồi xuống.
 
 ---
 
-## 2. KỸ THUẬT BUFFER TRONG RAM VÀ QUẢN TRỊ CACHE I/O CƠ BẢN
+## 2. KIẾN TRÚC BỘ NHỚ TRUNG GIAN (PAGE CACHE) 
 
-### Vụ nổ chi phí thao tác Disk I/O (The Threat Of Disk I/O Cost)
-Khi cắm dữ liệu liên tục 500.000 records, nếu cứ dồn Insert mỗi lệnh là OS lại chép `4096` bytes đập dính vào đĩa, máy tính của bạn sẽ bốc cháy vì ổ cứng kiệt sức. 
-
-### Page Cache (Bộ Nhớ Đệm) Giải Cứu
-Mã nguồn khắc phục bằng cách thiết kế hệ thống giữ `_cached_page`. 
-- Nó cất giữ toàn bộ Page ở mức RAM. Trạng thái dính nháp được ghi là `_cached_dirty = True`
-- Ghi đè vào cùng cục diện cho đến khi Full (Ví dụ được khoảng 60 records).
-- Khi đã Full nó tiến hành vắt một giọt lệnh xả (`flush_cache`) để viết khối đá RAM đó xuống File Base vật lý một lần.
-
-Như vậy thay vì đập I/O 60 lệnh Write lên mặt đĩa, Hệ quản trị chỉ làm gánh nặng nhấc ghi cho ổ SSD đúng "MỘT CHẠM". 
+Nếu mỗi một lệnh ghi sinh viên `[Thêm data] -> Cất xuống File.db -> Hoàn tất`, việc nhập $500,000$ bản ghi sẽ khiến ổ đĩa kêu thét vì $500,000$ lần gọi Write IOPS vật lý.
+**Kỹ nghệ Cache Phân Đoạn (Buffer pool mini):**
+- Biến cấp Lớp `_cached_page` và biến cờ Dirty-bit `_cached_dirty` đóng vai trò là một thanh Ram đệm RAM $4KB$.
+- Một Page nhận trung bình $\sim 60$ Records trước khi cạn $Ptr_{free}$. Khi thuật toán Generator Streaming chép vòng lặp nhập tin, nó đổ nhồi $60$ sinh viên vào chung một Memory Object cấp Lớp, và chỉ cắm `Dirty = True`.
+- **Ghi đĩa Một Chạm:** Chỉ khi Page bị đầy, vòng lặp sinh Page mới ở Cấp Heap chèn vào ổ cứng sẽ rớt một lệnh `.flush_cache` (Vứt đá đệm xuống đĩa). 
+$\rightarrow$ Lượng Write I/O giảm từ $500.000$ lần xuống còn vỏn vẹn chỉ $\approx 8.500$ lệnh (tiết kiệm sốc $98\%$ băng thông I/O hệ thống OS).
 
 ---
 
-## 3. KIẾN TRÚC STREAMING NẠP DATA (BULK LOAD GENERATOR)
+## 3. STREAMING GENERATOR LOGIC VÀ KIỂM SOÁT TÀI NGUYÊN BẤT BIẾN
 
-File `slotted_page_step3.py` đi kèm theo 1 hệ phễu làm File giả (Generate CSV) tạo ra danh sách 500,000 Sinh viên theo Format Variable-Length. Câu hỏi lớn là: OS có phải mở bộ file khổng lồ chục MegaByte đọng vào RAM?
+File mã nguồn đi kèm `generate_dataset` tự sinh $500.000$ dòng CSV tốn $\sim 35MB$. Thuật toán sau chép Bulk Load nó thể hiện cách thiết kế phần mềm Tối Ưu Bộ Nhớ:
 
-*   Câu trả lời là **KHÔNG**.
-*   Khung phần Bulk Load sử dụng cách thức `Iterator \ Generator`. CSV Data được hút từng hàng `csv.reader() -> next() -> read()`. Lôi ra RAM để Deserialize xong xả vào Page Buffer. Page Buffer xả vào Ổ Cứng bằng Streaming.
-*   **Chi phí cực thấp**: Bất kể bạn đút 50.000 hoặc đút tới 50 Triệu phần tử, Ram Load không hề bão hoà quá số 5 Megabyte. (Độ phức tạp tiêu tốn Storage không gian RAM: `O(1) Constant`).
+**Cơ chế Yield / Streaming Read:**
+- File lớn đến đâu, hệ thống Python hàm `csv.reader` chỉ hút ra từng hàng dữ liệu $O(1)$.
+- Serialization hàm chuyển thành dãy Byte nhị phân ngắn (VD: 54 byte). Chuyển rớt vào Cache Của Heap O(1).
+- Ram OS System Peak được bảo thủ ổn định $\sim 5 MB$ cực kỳ cố định. (Không phụ thuộc vào việc tập tin $50.000$ dòng hay cực hạn $50.000.000$ dòng).
 
 ---
 
-## 4. BENCHMARK CƠ BẢN - YẾU ĐIỂM CỦA HEAP FILE QUÉT FTS
+## 4. CHI PHÍ BIG-O: TỬ HUYỆT FULL TABLE SCAN (FTS)
 
-Hàm benchmark đo lường chức năng chèn và Get ở Step 3 có các ý nghĩa quan trọng sau:
-1.  Nhờ Page cache mà hiệu năng (Insert Benchmark) được đẩy lên hàng trăm nghìn Rows một giây. Ghi ổ mượt mà nhịp đều. 
-2.  Hiệu năng Get (Random Access theo chỉ mục gốc): Nếu truy xuất điểm `(PageID, SlotID)` thì I/O nhảy vọt tức thời xuống trang đó, tốc độ xấp xỉ tính theo phần của phần nghìn MicroSecond (µs).
-3.  **Tử huyệt cực kỳ của Heap Table:** Đạt tên CSDL `Full Table Scan` (Quét từ đầu chí cuối).
-    Để đếm thử xem có bao nhiêu "Nguyễn Văn Đạt", Hệ quản trị không có quyền ưu tiên, nó bắt buộc phải nhảy từng Page (từ 0...10.000) và dò quét qua từ điểm đầu cho tới chân. Đây là vấn nạn khét tiếng được gọi nôm na cho sinh viên CSDL: "**Sự thiếu thốn Index**". Bài toán này minh chứng dập khuôn rằng tại sao Hệ Thống cần thiết kế Index `B-Tree` để tìm kiếm không gian cho Heap File.
+Trực giao thông qua Hàm Test của hệ thống, Báo cáo cho kết luận FTS của Heap:
+- Thao tác đính tọa độ $PageID, SlotID$ qua hàm `get_record()` có thời gian phản hồi ở mức nhỏ cỡ Nano/Micro second. Vì CPU nhảy cực xa bằng công thức tính Offset Disk $O(1)$.
+- Toán cục đếm Full Scan Table `scan_all_records` Generator. Vì trong cấu trúc đống chưa định hình băm chỉ mục (Indexless), phép đếm "Tìm sinh viên tên Đạt" sẽ gò phần mềm chạy tuần tự qua các luồng offset từ `Page=0` đâm nát cạn đến `Page=End`, giải mã từng Byte `Serialization`. Mặc dù Python sử dụng Generator yield siêu việt, việc càn quét ngàn trăm MB bộ nhớ vẫn chứng minh cho sự khao khát ra đời của **Thuật toán cây B-Tree Indexing** để thoát kiếp FTS.

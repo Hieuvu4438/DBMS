@@ -1,28 +1,33 @@
-# BÁO CÁO CHUYÊN SÂU: KIẾN TRÚC VÀ CƠ CHẾ HOẠT ĐỘNG SLOTTED PAGE
+# BÁO CÁO KỸ THUẬT CHUYÊN SÂU: KIẾN TRÚC VÀ CƠ CHẾ HOẠT ĐỘNG SLOTTED PAGE (BƯỚC 1)
 **(Dựa trên phân tích mã nguồn `slotted_page.py`)**
 
-Tài liệu này cung cấp bản phân tích chuyên sâu về một trong những kỹ thuật nền tảng quan trọng nhất trong thiết kế Storage Engine của Hệ quản trị CSDL (DBMS): **Slotted Page Architecture** (Kiến trúc Trang Phân Khe).
+Tài liệu này cung cấp bản phân tích kỹ thuật ở mức độ byte (byte-level) về một trong những kỹ thuật nền tảng quan trọng nhất trong thiết kế Storage Engine của Hệ quản trị CSDL (DBMS): **Slotted Page Architecture** (Kiến trúc Trang Phân Khe).
 
 Mã nguồn `slotted_page.py` mô phỏng chính xác cách dữ liệu được sắp xếp vật lý bên trong các CSDL chuyên nghiệp như PostgreSQL (với Heap Page Tuple Format), SQLite, hoặc SQL Server.
 
 ---
 
-## 1. BÀI TOÁN CỐT LÕI MÀ "SLOTTED PAGE" GIẢI QUYẾT
+## 1. PHÂN TÍCH BÀI TOÁN LƯU TRỮ VÀ GIẢI PHÁP
 
-Trong DBMS, bộ nhớ máy tính hoặc ổ đĩa được chia thành các khối có kích thước cố định gọi là **Page** (thường là 4KB, 8KB hoặc 16KB). Việc ghi chép và đọc đĩa phụ thuộc vào các Page này chứ không truy xuất từng byte lẻ. 
+### 1.1 Vấn đề của cấu trúc tĩnh (Fixed-length Array)
+Trong DBMS, ổ cứng được phân vùng thành các khối (Block) gọi là **Page** với kích thước cố định (thực tiễn thường là $4KB$, $8KB$ hay $16KB$). Mã nguồn định nghĩa Hằng số `PAGE_SIZE = 4096` bytes. 
 
-Vấn đề xuất hiện khi lưu trữ các dòng dữ liệu (records) có **độ dài biến thiên (Variable-length records)** (ví dụ trường `VARCHAR` trong SQL):
-- Một sinh viên có tên dài 10 ký tự, sinh viên khác có tên dài 50 ký tự.
-- Nếu kìm cứng kích thước mỗi bản ghi giống nhau (Fixed-length) → Sẽ gây lãng phí ổ đĩa (Padding khoảng trắng thừa thãi).
-- Nếu ghi nối tiếp nhau kiểu chuỗi biến thiên → Khi xóa một dòng dữ liệu, ta để lại "lỗ hổng" (fragmentation). Rất khó để tái sử dụng chỗ trống đó hoặc phải "dời" toàn bộ các dòng khác → Chi phí xử lý quá chậm.
+Nếu hệ thống lưu trữ theo cấu trúc mảng một chiều thông thường (kích thước cố định), với tập dữ liệu các bản ghi có chiều dài biến thiên (Variable-length records - ví dụ: `VARCHAR`), hệ thống sẽ gặp các vấn đề nghiêm trọng:
+- **Internal Fragmentation (Phân mảnh nội):** Nếu CSDL ấn định kích thước một bản ghi là kích thước tối đa của kiểu dữ liệu (vd: $255$ bytes). Khi người dùng nhập tên dài $5$ bytes, nó sẽ dư thừa lãng phí mất $250$ bytes khoảng trắng tĩnh (padding). 
+- **External Fragmentation (Phân mảnh ngoại):** Khi chuỗi biến đổi dài ngắn chèn ép nhau, việc xóa một record sẽ tạo ra các khoảng hẹp khó tái sử dụng, việc di dời mọi bản ghi rất tốn kém $O(N)$.
 
-**Giải pháp:** Slotted Page tách ranh giới lưu trữ làm hai phần: Một cấu trúc MỤC LỤC nằm ở đỉnh và VÙNG DỮ LIỆU nằm ở đáy. Cả 2 cùng trượt tiến vào khoảng không ở giữa.
+### 1.2 Kiến trúc đối xứng của Slotted Page
+Để giải quyết bài toán Variable-length, Slotted Page thiết kế ranh giới lưu trữ phân chia làm hai thái cực hướng vào nhau:
+1. **Slot Directory (Mục lục cấu trúc):** Mọc từ đỉnh Page xuống (Top-down).
+2. **Data Area (Vùng dữ liệu thô):** Mọc từ đáy Page lên (Bottom-up).
+
+Khoảng không gian ở giữa chính là **Free Space**. Khi hai ranh giới này tiến dần vào nhau và chạm nhau, trang được tính là **Đầy (Full)**.
 
 ---
 
-## 2. BỐ CỤC KHÔNG GIAN BỘ NHỚ CỦA PAGE MÔ PHỎNG
+## 2. BỐ CỤC KHÔNG GIAN BỘ NHỚ (MEMORY LAYOUT)
 
-Đoạn code định nghĩa biến `PAGE_SIZE = 4096` bytes. Bố cục vật lý của 4096 byte này như sau:
+Bố cục vật lý của mảng `bytearray` có dung lượng $4096$ byte được phân chia cụ thể như sau:
 
 ```text
 Địa chỉ Offset 0
@@ -33,57 +38,57 @@ Vấn đề xuất hiện khi lưu trữ các dòng dữ liệu (records) có **
 ├─────────────────────────────────────────────────────────────┤ Địa chỉ Offset 12
 │            SLOT DIRECTORY (Mục lục trỏ gián tiếp)           │
 │                    (Phát triển đi xuống ↓)                  │
-│ [ Offset(2B) | Length(2B) ]  [ Offset(2B) | Length(2B) ]    │
-├─────────────────────────────────────────────────────────────┤
+│ [ Offset₀(2B) | Length₀(2B) ]  [ Offset₁(2B) | Length₁(2B) ]│
+├─────────────────────────────────────────────────────────────┤ <-- End_SlotDir
 │                                                             │
 │             FREE SPACE (Khoảng trống điểm giao)             │
 │                                                             │
-├─────────────────────────────────────────────────────────────┤ <- Free Space Pointer (Biến động)
+├─────────────────────────────────────────────────────────────┤ <-- Free Space Pointer
 │                DATA AREA (Vùng dữ liệu thực tế)             │
 │                   (Phát triển đi ngược lên ↑)               │
 │ [ Dữ liệu Record N ] [ Dữ liệu Record N-1 ] ... [ Record 0 ]│
 └─────────────────────────────────────────────────────────────┘ Địa chỉ Offset 4095
 ```
 
-Như bạn có thể thấy, **Dữ liệu được nạp vào từ đáy trang (đẩy ngược lên), trong khi index được đẩy từ trên đỉnh hạ xuống**. Khoảng rỗng ở giữa là bộ nhớ có thể tái dụng. Khi 2 vùng trên-dưới chạm nhau, Page được tính là Full.
-
 ---
 
-## 3. PHÂN TÍCH SÂU CÁC KHỐI CODE QUAN TRỌNG
+## 3. PHÂN TÍCH TOÁN HỌC VÀ THUẬT TOÁN LOGIC
 
-### 3.1. Cấu trúc Page Header (Hàm `_write_header` & `_read_header`)
-Header tốn chính xác 12 bytes. Để xử lý cấu trúc kiểu byte chuẩn mà máy tính dễ đọc-ghi vào file nhị phân, tác giả dùng module `struct` của Python với định dạng ngàm `<IHHI` (Little-Endian):
-*   `I` (Unsigned Int - 4 Bytes) - **Page ID**: Định danh ID để DBMS nhận diện Trang này.
-*   `H` (Unsigned Short - 2 Bytes) - **Slot Count**: Tổng số lượng bản ghi có mặt trong trang.
-*   `H` (Unsigned Short - 2 Bytes) - **Free Space Pointer**: Con trỏ quan trọng nhất. Nó đánh dấu "nóc" của phần dữ liệu đang chất đống ở dưới đáy. Khi chưa có dữ liệu nào `free_space_ptr = 4096`. Khi có cục data dài 100 byte được nhét xuống đáy, biến này được cập nhật `free_space_ptr = 3996`.
-*   `I` (Unsigned Int - 4 Bytes) - **Reserved**: Để dành nâng cấp (thường dùng lưu Log Sequence Number trong Transaction/Recovery system thực tế).
+### 3.1. Cấu trúc Page Header 
+Header tốn chính xác 12 bytes. Để xử lý cấu trúc kiểu byte chuẩn mà CPU có thể dễ giải mã, DBMS dùng thư viện `struct` với định dạng Little-Endian `<IHHI`:
+*   `I` (Unsigned Int - 4 Bytes): **Page ID**. Tham chiếu tuyệt đối số hiệu của trang đĩa.
+*   `H` (Unsigned Short - 2 Bytes): **Slot Count** ($N_{slots}$). Tổng số bản ghi tồn tại trong mục lục.
+*   `H` (Unsigned Short - 2 Bytes): **Free Space Pointer** ($Ptr_{free}$). Con trỏ cực kỳ quan trọng đánh dấu mũi nhọn của vùng Data Area đang đi dần lên. Khởi tạo đầu tiên $Ptr_{free} = 4096$.
+*   `I` (Unsigned Int - 4 Bytes): **Reserved**. Thường dùng lưu *Log Sequence Number* trong Transaction/Recovery system.
 
-### 3.2. Thuật toán Chèn dữ liệu (Hàm `insert_record`)
-Khi hệ thống có cục bytes nhị phân độ dài biến thiên (do Hàm Serialization xử lý), quá trình Insert chạy qua các bước:
-1.  **Tính ranh giới trên (Của Directory):** `slot_dir_end = 12 + (slot_count * 4)`. Xác định điểm tận cùng của mục lục. Trong đó 12 là độ lớn header, mỗi slot dài 4 byte.
-2.  **Tính ranh giới dưới (Của Data):** `new_record_offset = free_space_ptr - record_len`. Do đẩy dữ liệu từ dưới lên, ta tính "ngôi nhà mới" bằng cách khoét thêm vào Free Space.
-3.  **Kiểm soát tràn bộ nhớ (Overflow Check):**  Nếu `new_slot_dir_end > new_record_offset`, có nghĩa hai thế lực trên-dưới đã giao nhau. Code thực hiện rớt ngoại lệ `ValueError("Page đã đầy")`.
-4.  **Chép byte:** Thực thi `self.data[new_record_offset : new_record_offset + record_len] = data_bytes`.
-5.  **Ghi vào Slot Directory:** Bọc 1 cục 4 byte bằng lệnh `struct.pack_into('<HH', ...)` gồm `(new_record_offset, record_len)`. Đây là thông tin giúp DBMS định vị sau này.
-6.  **Cập nhật cấu trúc:** Tăng bộ biến cục bộ (cộng slot, nới free_space_ptr).
+### 3.2. Thuật toán Chèn dữ liệu (Insert Routine)
 
-### 3.3. Phương pháp Indirection & Đọc Dữ Liệu (Hàm `read_record`)
-Đây là Tinh hoa của Slotted Page. 
-*   **Hệ thống bên ngoài không bao giờ truy xuất thẳng offset bộ nhớ vật lý**
-*   Khi cần truy xuất bản ghi thứ 3, DBMS dùng toạ độ `Slot #3`. Toạ độ này gọi là **Record Pointer (Page ID = X, Slot ID = 3)**.
-*   Hàm `read_record(3)` đi tới đỉnh trang `(12 + 3 * 4)` đọc ra thông số `(Offset, Length)`.
-*   Dựa vào con số đó chạy ra sau chót trang móc đúng cục Data.
+Khi hệ thống chèn một chuỗi Bytes biến thiên, thuật toán được gọi sẽ thi hành các phép định tính toán học:
 
-#### Tại sao lại "cồng kềnh" như vậy?
-Bởi vì trong tương lai (ở các bài tập mở rộng), DBMS sẽ có tính năng "Dồn mảng - Compact Defragment". Nghĩa là ta xóa 1 sinh viên, để lại lỗ hổng, máy tính sẽ dịch bạt các dòng ở dưới đè lên mảng rỗng để gom Free Space về 1 mối. 
-Việc này làm thay đổi `Offset Vật Lý` của mọi Record. VỚI HỆ THỐNG SLOT, DBMS CHỈ CẦN cập nhật Offset mới vào đúng Slot #3 tương ứng. Bảng mục lục Index (như B-Tree) bên ngoài trang KHÔNG HỀ BIẾT điều đó xảy ra vì nó đang tham chiếu đến `Slot #3` - thứ vốn không thay đổi. Tránh triệt để thảm hoạ Dangling Pointer (Con trỏ mồ côi lạc lối).
+**Bước 1: Tính toán ranh giới dưới (Của Directory):** 
+Xác định độ dài cực đại của chỉ mục hiện tại:
+$$End_{SlotDir} = HeaderSize + (N_{slots} \times SlotEntrySize)$$
+*(Trong đó, $HeaderSize = 12$, $SlotEntrySize = 4$)*
 
----
+Khi bản ghi mới chuẩn bị sinh ra mục lục, ranh giới ảo tương lai sẽ trở thành:
+$$NewEnd_{SlotDir} = End_{SlotDir} + SlotEntrySize$$
 
-## 4. KẾT LUẬN VỀ KIẾN TRÚC
+**Bước 2: Tính toán ranh giới trên (Của Data Area):**
+Tính "ngôi nhà mới" (Offset) của Payload bằng cách ăn mòn vào Free Space đẩy ngược lên:
+$$Offset_{NewRecord} = Ptr_{free} - Length_{Record}$$
 
-Mã nguồn `slotted_page.py` diễn giải một nguyên lý kinh điển nhưng tối ưu của Khoa học máy tính cấu trúc cấp thấp:
-1.  **Tiết kiệm hoàn hảo:** Variable-length cho phép text dài 5 byte hay 500 byte đều nằm khít nhau, không chèn byte thừa (Padding Zeroes).
-2.  **Khối Block duy nhất (4KB Sector-friendly):** Quản lý đóng gói tất cả metadata, mục lục và dữ liệu vào duy nhất 1 mảng bytes. Khi cần có thể dùng hàm `save_to_bin` kết xuất xả file thẳng vào ổ cứng cực lẹ không dính phân mảnh File System OS. Tốc độ I/O nhanh hơn nhiều lần so với ghi rời rạc.
+**Bước 3: Phương trình Kiểm soát chạm (Collision Check):**
+Sức chứa tổng hợp chỉ hợp lệ và không gây tràn nếu và chỉ nếu ranh giới mục lục không "chèn ép" (chạm) trực tiếp vào ranh giới Data.
+$$NewEnd_{SlotDir} \le Offset_{NewRecord}$$
+Nếu điều kiện sai $\rightarrow$ Trả về Exception `"LỖI] Page đã đầy"`.
 
-Mô hình này là ví dụ xuất sắc về thiết kế Phân Lớp Lô Gíc (cơ chế Indirection Array). Sự đầu tư và comment kịch bản của tác giả khiến code đóng vai trò như một giáo trình thu nhỏ minh hoạ hoàn thiện Storage Management của bộ môn HQT Cơ Sở Dữ Liệu.
+**Bước 4: Vật lý hóa xuống Byte:**
+- Chép $Length_{Record}$ byte vào vùng tọa độ `data[Offset_{NewRecord} : Offset_{NewRecord} + Length_{Record}]`.
+- Đóng gói địa chỉ bằng hàm pack `(Offset_{NewRecord}, Length_{Record})` (tổng cộng 4 byte) và ghi vào chính xác vùng Offset $End_{SlotDir}$ trong Header của Mảng.
+- Tăng biến nhấp lưu bộ $N_{slots} = N_{slots} + 1$, ép $Ptr_{free} = Offset_{NewRecord}$.
+- Ghi đè cập nhật ngược lại về Header 12 byte vật lý. Chi phí thời gian tiệm cận $O(1)$.
+
+### 3.3 Phương Pháp Indirection (Cơ chế trỏ gián tiếp)
+Hàm đọc `read_record(slot_id)` hoạt động như thiết bị tra cứu Mảng Tuyến Tính. Quá trình tính toán tọa độ truy xuất diễn ra như sau:
+$$Pos_{Slot} = 12 + slot\_id \times 4$$
+Sau đó giải mã $(Offset, Length)$ để nhúng móc chuỗi String thực ở tận đáy Page. Mặc dù mất 2 công đoạn (O(1) Memory Jump), nhưng đây là linh hồn cho khả năng thay đổi bộ nhớ mà sẽ được làm rõ hơn ở chức năng dập phân mảnh ở Bước 2.
