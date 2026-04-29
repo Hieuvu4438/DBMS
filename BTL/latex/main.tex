@@ -1,0 +1,238 @@
+\documentclass[12pt,a4paper,oneside]{report}
+
+% XeLaTeX/LuaLaTeX is recommended for exact Times New Roman and Vietnamese text.
+% pdfLaTeX fallback is included to avoid engine-related compile failures.
+\usepackage[a4paper,right=3cm,left=2cm,top=2cm,bottom=2cm]{geometry}
+\usepackage{iftex}
+\ifPDFTeX
+    \usepackage[utf8]{inputenc}
+    \usepackage[T5]{fontenc}
+    \usepackage{mathptmx}
+\else
+    \usepackage{fontspec}
+    \IfFontExistsTF{Times New Roman}{\setmainfont{Times New Roman}}{\setmainfont{TeX Gyre Termes}}
+    \IfFontExistsTF{Consolas}{\setmonofont{Consolas}[Scale=MatchLowercase]}{\setmonofont{Latin Modern Mono}[Scale=MatchLowercase]}
+\fi
+
+\usepackage{setspace}
+\singlespacing
+\usepackage{indentfirst}
+\setlength{\parindent}{1.27cm}
+\setlength{\parskip}{0pt}
+
+\usepackage{graphicx}
+\graphicspath{{assets/images/}{assets/logos/}}
+\usepackage{eso-pic}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{tocloft}
+\usepackage{fancyhdr}
+\usepackage{xurl}
+\usepackage{hyperref}
+\usepackage[backend=biber,style=numeric,sorting=none]{biblatex}
+
+\addbibresource{bib/references.bib}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=black,
+    citecolor=black,
+    urlcolor=blue,
+    pdfauthor={Group 02},
+    pdftitle={Vietnamese Sign Language Online Education System}
+}
+
+\definecolor{codebackground}{RGB}{248,248,248}
+\definecolor{codeborder}{RGB}{215,215,215}
+\definecolor{codekeyword}{RGB}{0,75,135}
+\definecolor{codecomment}{RGB}{90,120,90}
+\definecolor{codestring}{RGB}{150,70,30}
+
+\lstdefinestyle{sqlstyle}{
+    language=SQL,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{codekeyword}\bfseries,
+    commentstyle=\color{codecomment}\itshape,
+    stringstyle=\color{codestring},
+    backgroundcolor=\color{codebackground},
+    frame=single,
+    rulecolor=\color{codeborder},
+    breaklines=true,
+    breakatwhitespace=false,
+    columns=fullflexible,
+    keepspaces=true,
+    showstringspaces=false,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    stepnumber=1,
+    numbersep=8pt,
+    xleftmargin=1.5em,
+    framexleftmargin=1.2em,
+    captionpos=b,
+    tabsize=4
+}
+
+\lstdefinestyle{terminalstyle}{
+    basicstyle=\ttfamily\small,
+    backgroundcolor=\color{codebackground},
+    frame=single,
+    rulecolor=\color{codeborder},
+    breaklines=true,
+    columns=fullflexible,
+    keepspaces=true,
+    showstringspaces=false,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    numbersep=8pt,
+    xleftmargin=1.5em,
+    framexleftmargin=1.2em,
+    captionpos=b
+}
+
+\lstnewenvironment{sqlcode}[1][]{\lstset{style=sqlstyle,#1}}{}
+\lstnewenvironment{terminalcode}[1][]{\lstset{style=terminalstyle,#1}}{}
+\renewcommand{\lstlistingname}{Code Listing}
+\renewcommand{\lstlistlistingname}{List of Code Listings}
+
+\captionsetup{font=small,labelfont=bf,labelsep=period}
+\renewcommand{\arraystretch}{1.2}
+\setlength{\emergencystretch}{2em}
+\setlist{nosep,leftmargin=1.2cm}
+
+\titleformat{\chapter}[display]
+    {\normalfont\bfseries\centering\Large}
+    {CHAPTER \thechapter}
+    {0.5em}
+    {\MakeUppercase}
+\titlespacing*{\chapter}{0pt}{-10pt}{20pt}
+
+\titleformat{\section}
+    {\normalfont\bfseries\large}
+    {\thesection}
+    {0.75em}
+    {}
+\titleformat{\subsection}
+    {\normalfont\bfseries\normalsize}
+    {\thesubsection}
+    {0.75em}
+    {}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{Vietnamese Sign Language Online Education System}
+\fancyhead[R]{Group 02}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\newcommand{\coverborder}{%
+    \AddToShipoutPictureBG*{%
+        \AtPageLowerLeft{%
+            \includegraphics[width=\paperwidth,height=\paperheight]{\detokenize{assets/logos/khung-vien-trang-bia-Word-10.jpg}}%
+        }%
+    }%
+}
+
+\begin{document}
+
+\begin{titlepage}
+    \coverborder
+    \thispagestyle{empty}
+    \centering
+    {\bfseries\Large HỌC VIỆN CÔNG NGHỆ BƯU CHÍNH VIỄN THÔNG\par}
+    \vspace{0.35cm}
+    {\bfseries\large KHOA CÔNG NGHỆ THÔNG TIN 1\par}
+    \vspace{1.1cm}
+
+    \IfFileExists{assets/logos/logo_ptit.jpg}{
+        \includegraphics[height=3.2cm,keepaspectratio]{assets/logos/logo_ptit.jpg}
+    }{
+        \fbox{\parbox[c][3.0cm][c]{3.0cm}{\centering PTIT\\Logo}}
+    }
+
+    \vspace{1.2cm}
+    {\bfseries\Large MAJOR ASSIGNMENT REPORT\par}
+    \vspace{0.4cm}
+    {\bfseries\Large DATABASE MANAGEMENT SYSTEMS\par}
+    \vspace{1.2cm}
+
+    {\bfseries\large ĐỀ TÀI:\par}
+    \vspace{0.3cm}
+    {\bfseries\Large HỆ THỐNG GIÁO DỤC TRỰC TUYẾN NGÔN NGỮ KÝ HIỆU VIỆT NAM\par}
+    \vspace{0.25cm}
+    {\itshape\large Vietnamese Sign Language Online Education System\par}
+
+    \vfill
+
+    \begin{center}
+        \begin{tabular}{>{\bfseries}p{4cm}p{9cm}}
+            Class: & D23CQCE06-B \\
+            Group: & 02 \\
+            Course: & Hệ quản trị cơ sở dữ liệu \\
+        \end{tabular}
+    \end{center}
+
+    \vspace{0.3cm}
+    \begin{center}
+        \begin{tabular}{>{\bfseries}p{1cm}p{7cm}p{4cm}}
+            No. & Student name & Student ID \\
+            \midrule
+            1 & Vũ Đình Hiếu & B23DCCE036 \\
+            2 & Đặng Văn Chiến & B23DCCE012 \\
+            3 & Bùi Quang Thắng & B23DCCN751 \\
+        \end{tabular}
+    \end{center}
+
+    \vfill
+    {\bfseries Hà Nội, \the\year\par}
+\end{titlepage}
+
+\pagenumbering{roman}
+\setcounter{page}{1}
+
+\chapter*{Acknowledgements}
+\addcontentsline{toc}{chapter}{Acknowledgements}
+This section will be completed in the final version of the report.
+
+\chapter*{Abstract}
+\addcontentsline{toc}{chapter}{Abstract}
+This section will summarize the objectives, database design, implementation scope, and key outcomes of the project.
+
+\tableofcontents
+\clearpage
+\phantomsection
+\addcontentsline{toc}{chapter}{List of Figures}
+\listoffigures
+\clearpage
+\phantomsection
+\addcontentsline{toc}{chapter}{List of Tables}
+\listoftables
+\clearpage
+\phantomsection
+\addcontentsline{toc}{chapter}{List of Code Listings}
+\lstlistoflistings
+\clearpage
+\input{sections/00_abbreviations}
+\clearpage
+
+\pagenumbering{arabic}
+\setcounter{page}{1}
+
+\input{sections/01_introduction}
+\input{sections/02_configuration_tools_platforms}
+\input{sections/03_database_design_overview}
+\input{sections/04_implementation_deployment}
+\input{sections/05_conclusion}
+\input{sections/06_references}
+
+
+\end{document}

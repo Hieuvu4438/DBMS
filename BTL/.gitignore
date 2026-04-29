@@ -1,0 +1,43 @@
+# Local Claude/IDE configuration
+.claude/
+.dbeaver/
+.project
+.vscode/
+.idea/
+
+# Environment and secrets
+.env
+.env.*
+*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Logs
+*.log
+
+# LaTeX build artifacts
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.lof
+*.log
+*.lot
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
+*.xdv
+*.pdf
+
+# OS files
+.DS_Store
+Thumbs.db

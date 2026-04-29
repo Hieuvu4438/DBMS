@@ -1,0 +1,911 @@
+\chapter{Implementation and Deployment}
+
+\section{Database Schema Implementation}
+
+The database schema was implemented in PostgreSQL using Data Definition Language (DDL). The implementation focuses on correctness, normalization, referential integrity, and extensibility. The schema is divided into five functional modules: User Management, Dictionary, General Course, Microlearning, and Gamification and Engagement. Each module contains tables that represent a specific group of business entities, while foreign keys connect the modules into a consistent relational model.
+
+The complete schema script is stored in \texttt{Scripts/TABLE.sql}. This section presents the main implementation decisions and representative DDL fragments that demonstrate how the schema was created.
+
+\subsection{DDL Implementation Overview}
+
+The schema uses PostgreSQL 15+ features such as UUID primary keys, identity columns, timestamp columns, JSONB fields, check constraints, unique constraints, and foreign key actions. Because several tables use \texttt{gen\_random\_uuid()}, the database should enable the \texttt{pgcrypto} extension before executing the table creation script.
+
+\begin{sqlcode}[caption={PostgreSQL extension required for UUID generation},label={lst:ddl-pgcrypto-extension}]
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+\end{sqlcode}
+
+Table~\ref{tab:schema-module-implementation} summarizes the implemented modules and their corresponding tables.
+
+\begin{small}
+\begin{longtable}{p{3.2cm}p{10.6cm}}
+\caption{Implemented database modules and tables}\label{tab:schema-module-implementation}\\
+\toprule
+\textbf{Module} & \textbf{Implemented Tables} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Module} & \textbf{Implemented Tables} \\
+\midrule
+\endhead
+User Management & \path{roles}, \path{users}, \path{user_profiles}, \path{students}, \path{teachers}, \path{authentication_sessions} \\
+Dictionary & \path{dictionary_categories}, \path{dictionary_entries}, \path{dictionary_variations} \\
+General Course & \path{general_course_categories}, \path{general_courses}, \path{general_course_modules}, \path{general_course_lessons}, \path{learning_materials}, \path{course_enrollments}, \path{comments} \\
+Microlearning & \path{microlearning_topics}, \path{microlearning_units}, \path{microlearning_lessons}, \path{microlearning_lesson_parts}, \path{microlearning_questions} \\
+Gamification and Engagement & \path{student_streaks}, \path{achievements}, \path{user_achievements}, \path{user_feedbacks}, \path{notification_users} \\
+\bottomrule
+\end{longtable}
+\end{small}
+
+The table creation order follows dependency direction. Reference tables such as \texttt{roles}, \texttt{dictionary\_categories}, and \texttt{general\_course\_categories} are created before dependent tables. Parent entities such as \texttt{users}, \texttt{general\_courses}, and \texttt{microlearning\_topics} are also created before child entities that contain foreign keys.
+
+\subsection{Primary Key and Identifier Design}
+
+The schema uses two main identifier strategies. Large business entities such as users, courses, lessons, dictionary entries, enrollments, and notifications use UUID primary keys. UUIDs are suitable for application-level entities because they reduce dependence on sequential identifiers and are convenient when records may be created by different application components.
+
+Small reference tables use integer identity columns. Examples include \texttt{roles}, \texttt{dictionary\_categories}, \texttt{general\_course\_categories}, \texttt{microlearning\_topics}, and \texttt{achievements}. This keeps reference data compact and easy to read.
+
+\begin{sqlcode}[caption={Representative identifier definitions},label={lst:ddl-identifier-examples}]
+CREATE TABLE roles (
+    role_id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    role_name VARCHAR(50) NOT NULL UNIQUE
+);
+
+CREATE TABLE users (
+    user_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    username VARCHAR(50) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    email VARCHAR(100) UNIQUE,
+    role_id INTEGER NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    CONSTRAINT fk_users_role
+        FOREIGN KEY (role_id)
+        REFERENCES roles (role_id)
+        ON DELETE RESTRICT
+);
+\end{sqlcode}
+
+The \texttt{users} table illustrates several schema design decisions. The username is mandatory and unique, while email is also unique when provided. The password is stored as a hash rather than plain text. The \texttt{created\_at} and \texttt{updated\_at} columns support auditability, and \texttt{is\_deleted} supports soft deletion.
+
+\subsection{Referential Integrity Design}
+
+Foreign key constraints are used throughout the schema to ensure that dependent data cannot reference non-existent parent records. The schema uses both \texttt{ON DELETE CASCADE} and \texttt{ON DELETE RESTRICT}, depending on the business meaning of each relationship.
+
+Cascading deletion is used when a child record has no independent meaning without its parent. For example, a user profile depends on a user, course modules depend on a course, and microlearning lessons depend on a microlearning unit. Restrictive deletion is used when deleting a parent record could damage historical or administrative consistency. For example, roles and teachers are protected from deletion while user accounts or courses still reference them.
+
+\begin{sqlcode}[caption={Representative foreign key relationships},label={lst:ddl-foreign-key-examples}]
+CREATE TABLE user_profiles (
+    profile_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL UNIQUE,
+    full_name VARCHAR(100) NOT NULL,
+    avatar_url VARCHAR(255),
+    phone_number VARCHAR(20),
+    date_of_birth DATE,
+    CONSTRAINT fk_user_profiles_user
+        FOREIGN KEY (user_id)
+        REFERENCES users (user_id)
+        ON DELETE CASCADE
+);
+
+CREATE TABLE general_courses (
+    course_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    teacher_id UUID NOT NULL,
+    category_id INTEGER NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    description TEXT,
+    visibility_status VARCHAR(20) NOT NULL DEFAULT 'DRAFT',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    CONSTRAINT ck_course_visibility CHECK (
+        visibility_status IN ('DRAFT', 'PUBLISHED', 'ARCHIVED')
+    ),
+    CONSTRAINT fk_courses_teacher
+        FOREIGN KEY (teacher_id)
+        REFERENCES teachers (user_id)
+        ON DELETE RESTRICT,
+    CONSTRAINT fk_courses_category
+        FOREIGN KEY (category_id)
+        REFERENCES general_course_categories (category_id)
+        ON DELETE RESTRICT
+);
+\end{sqlcode}
+
+\subsection{Business Constraints}
+
+The DDL implementation defines database-level constraints for important business rules. These constraints reduce invalid data before it enters the system and provide a safety layer independent of application code.
+
+\begin{small}
+\begin{longtable}{p{3.4cm}p{4.8cm}p{5.8cm}}
+\caption{Representative database constraints}\label{tab:ddl-business-constraints}\\
+\toprule
+\textbf{Constraint Type} & \textbf{Example} & \textbf{Purpose} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Constraint Type} & \textbf{Example} & \textbf{Purpose} \\
+\midrule
+\endhead
+Unique constraint & \path{uq_student_course_enrollment} & Prevents a student from enrolling in the same course more than once. \\
+Check constraint & \path{ck_enrollment_progress} & Ensures that course progress remains between 0 and 100. \\
+Check constraint & \path{ck_course_visibility} & Restricts course status to \texttt{DRAFT}, \texttt{PUBLISHED}, or \texttt{ARCHIVED}. \\
+Check constraint & \path{ck_feedback_rating} & Ensures feedback ratings are between 1 and 5 when provided. \\
+Unique constraint & \path{uq_module_order_per_course} & Prevents duplicate module order positions inside the same course. \\
+\bottomrule
+\end{longtable}
+\end{small}
+
+\begin{sqlcode}[caption={Representative business constraints},label={lst:ddl-business-constraint-examples}]
+CREATE TABLE course_enrollments (
+    enrollment_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    student_id UUID NOT NULL,
+    course_id UUID NOT NULL,
+    progress NUMERIC(5, 2) NOT NULL DEFAULT 0.00,
+    enrolled_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_student_course_enrollment
+        UNIQUE (student_id, course_id),
+    CONSTRAINT ck_enrollment_progress
+        CHECK (progress >= 0 AND progress <= 100),
+    CONSTRAINT fk_enrollments_student
+        FOREIGN KEY (student_id)
+        REFERENCES students (user_id)
+        ON DELETE CASCADE,
+    CONSTRAINT fk_enrollments_course
+        FOREIGN KEY (course_id)
+        REFERENCES general_courses (course_id)
+        ON DELETE CASCADE
+);
+
+CREATE TABLE student_streaks (
+    streak_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    student_id UUID NOT NULL UNIQUE,
+    current_streak INTEGER NOT NULL DEFAULT 0,
+    highest_streak INTEGER NOT NULL DEFAULT 0,
+    last_activity_date DATE,
+    CONSTRAINT ck_streak_non_negative
+        CHECK (current_streak >= 0 AND highest_streak >= 0),
+    CONSTRAINT ck_streak_highest_gte_current
+        CHECK (highest_streak >= current_streak),
+    CONSTRAINT fk_streaks_student
+        FOREIGN KEY (student_id)
+        REFERENCES students (user_id)
+        ON DELETE CASCADE
+);
+\end{sqlcode}
+
+The enrollment table demonstrates a typical many-to-many relationship between students and courses. The unique constraint prevents duplicate enrollments, while the progress check constraint guarantees that progress remains a valid percentage. The streak table demonstrates consistency rules for gamification data, ensuring that streak values cannot be negative and that the highest streak cannot be lower than the current streak.
+
+\subsection{Use of JSONB Fields}
+
+The schema uses \texttt{JSONB} in selected places where flexible structured data is useful. For example, \path{learning_materials.material_transcript} can store transcript segments, timestamps, or structured annotations. Similarly, \path{microlearning_questions.options_json} can store answer options for different question formats.
+
+\begin{sqlcode}[caption={Representative JSONB fields},label={lst:ddl-jsonb-examples}]
+CREATE TABLE learning_materials (
+    material_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    lesson_id UUID NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    content_url VARCHAR(255) NOT NULL,
+    material_transcript JSONB,
+    CONSTRAINT fk_materials_lesson
+        FOREIGN KEY (lesson_id)
+        REFERENCES general_course_lessons (lesson_id)
+        ON DELETE CASCADE
+);
+
+CREATE TABLE microlearning_questions (
+    question_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    part_id UUID NOT NULL,
+    question_text TEXT NOT NULL,
+    question_type VARCHAR(20) NOT NULL,
+    options_json JSONB NOT NULL,
+    correct_answer VARCHAR(255) NOT NULL,
+    CONSTRAINT fk_ml_questions_part
+        FOREIGN KEY (part_id)
+        REFERENCES microlearning_lesson_parts (part_id)
+        ON DELETE CASCADE
+);
+\end{sqlcode}
+
+Using \texttt{JSONB} avoids over-specializing the schema for data whose internal shape may vary. At the same time, the main relationships remain relational and normalized.
+
+\subsection{Indexing Strategy}
+
+Indexes are created for columns that are frequently used in joins, filters, or report queries. Most indexes target foreign key columns because these columns are repeatedly used to connect parent and child tables. Additional indexes are created on soft-deletion flags such as \texttt{users.is\_deleted} and \texttt{general\_courses.is\_deleted}, because many application queries filter out inactive records.
+
+\begin{small}
+\begin{longtable}{p{3.4cm}p{4.9cm}p{5.7cm}}
+\caption{Indexing strategy}\label{tab:indexing-strategy}\\
+\toprule
+\textbf{Index Category} & \textbf{Example Index} & \textbf{Query Benefit} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Index Category} & \textbf{Example Index} & \textbf{Query Benefit} \\
+\midrule
+\endhead
+User role lookup & \path{idx_users_role_id} & Speeds up joins between users and roles. \\
+Session lookup & \path{idx_auth_sessions_user_id} & Speeds up session retrieval by user. \\
+Course ownership & \path{idx_courses_teacher_id} & Speeds up listing courses created by a teacher. \\
+Course hierarchy & \path{idx_modules_course_id}, \path{idx_lessons_module_id} & Speeds up traversal from courses to modules and lessons. \\
+Enrollment reports & \path{idx_enrollments_student_id}, \path{idx_enrollments_course_id} & Speeds up student progress and course analytics queries. \\
+Soft deletion filters & \path{idx_users_is_deleted}, \path{idx_courses_is_deleted} & Speeds up filtering active users and active courses. \\
+\bottomrule
+\end{longtable}
+\end{small}
+
+\begin{sqlcode}[caption={Representative index definitions},label={lst:ddl-index-examples}]
+CREATE INDEX IF NOT EXISTS idx_users_role_id
+    ON users (role_id);
+
+CREATE INDEX IF NOT EXISTS idx_courses_teacher_id
+    ON general_courses (teacher_id);
+
+CREATE INDEX IF NOT EXISTS idx_enrollments_student_id
+    ON course_enrollments (student_id);
+
+CREATE INDEX IF NOT EXISTS idx_enrollments_course_id
+    ON course_enrollments (course_id);
+
+CREATE INDEX IF NOT EXISTS idx_users_is_deleted
+    ON users (is_deleted);
+
+CREATE INDEX IF NOT EXISTS idx_courses_is_deleted
+    ON general_courses (is_deleted);
+\end{sqlcode}
+
+The indexing strategy is intentionally focused rather than excessive. Indexes improve read performance but also add storage cost and maintenance overhead during insert, update, and delete operations. Therefore, the schema prioritizes indexes that support common relational joins and high-frequency filters.
+
+\subsection{Schema Implementation Evaluation}
+
+Overall, the schema implementation provides a consistent foundation for the Vietnamese Sign Language Online Education System. The design applies normalization to separate independent concepts, uses foreign keys to preserve relationships, applies constraints to enforce business rules, and defines indexes to support expected query patterns. These decisions make the database suitable for both operational use and academic demonstration of core DBMS concepts.
+
+\section{Views}
+
+Views are used in this project to simplify frequently used reporting queries and to provide a stable read-only layer over multiple normalized tables. Instead of requiring application code or report queries to repeatedly join user, course, enrollment, streak, and feedback tables, the database exposes meaningful virtual tables for common analytical scenarios. This improves readability, reduces query duplication, and supports academic demonstration of relational abstraction.
+
+The current implementation includes three reporting views: \texttt{vw\_student\_progress\_report}, \texttt{vw\_course\_analytics}, and \texttt{vw\_top\_learners\_leaderboard}. These views are designed for student progress tracking, course performance analysis, and gamified learner ranking.
+
+\subsection{Student Progress Report View}
+
+\textbf{Purpose.} The \texttt{vw\_student\_progress\_report} view provides a consolidated report of student learning progress. It combines account information, profile information, student details, course enrollment data, and course titles into a single queryable view. This view is useful for teachers and administrators who need to monitor how students are progressing across enrolled courses.
+
+\begin{sqlcode}[caption={Student progress report view},label={lst:view-student-progress-report}]
+CREATE OR REPLACE VIEW vw_student_progress_report AS
+SELECT
+    up.full_name AS student_name,
+    u.email,
+    s.school_name,
+    c.title AS course_title,
+    ce.progress,
+    ce.enrolled_at,
+    CASE
+        WHEN ce.progress = 100 THEN 'Completed'
+        WHEN ce.progress > 0 THEN 'In progress'
+        ELSE 'Newly enrolled'
+    END AS learning_status
+FROM users u
+JOIN user_profiles up ON u.user_id = up.user_id
+JOIN students s ON u.user_id = s.user_id
+JOIN course_enrollments ce ON s.user_id = ce.student_id
+JOIN general_courses c ON ce.course_id = c.course_id
+WHERE u.is_deleted = FALSE;
+\end{sqlcode}
+
+The view derives a human-readable learning status from the numeric progress value. A progress value of 100 indicates that the course has been completed, a value greater than 0 indicates that the student is currently learning, and a value of 0 indicates a newly registered course. The condition \texttt{u.is\_deleted = FALSE} ensures that soft-deleted user accounts are excluded from normal progress reports.
+
+\begin{sqlcode}[caption={Testing the student progress report view},label={lst:test-student-progress-report}]
+SELECT course_title, progress, learning_status
+FROM vw_student_progress_report
+WHERE email = 'minh.student@signlearn.local'
+ORDER BY progress DESC;
+\end{sqlcode}
+
+Figure~\ref{fig:view-student-progress-report-result} shows the execution result of the student progress report view. The result confirms that the view can return course titles, numeric progress values, and derived learning statuses in a single query.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.95\textwidth,height=0.55\textheight,keepaspectratio]{\detokenize{assets/images/VIEW1.png}}
+    \caption{Execution result of \texttt{vw\_student\_progress\_report}}
+    \label{fig:view-student-progress-report-result}
+\end{figure}
+
+\subsection{Course Analytics View}
+
+\textbf{Purpose.} The \texttt{vw\_course\_analytics} view supports course-level evaluation by aggregating enrollment and feedback data. It allows administrators and teachers to evaluate how many students are enrolled in each course, the average progress of learners, and the average rating associated with course-related feedback.
+
+\begin{sqlcode}[caption={Course analytics view},label={lst:view-course-analytics}]
+CREATE OR REPLACE VIEW vw_course_analytics AS
+SELECT
+    c.course_id,
+    c.title AS course_title,
+    up.full_name AS teacher_name,
+    COUNT(ce.enrollment_id) AS total_students,
+    ROUND(AVG(ce.progress), 2) AS avg_progress,
+    (
+        SELECT ROUND(AVG(rating), 1)
+        FROM user_feedbacks
+        WHERE context LIKE '%' || c.title || '%'
+    ) AS avg_rating
+FROM general_courses c
+JOIN teachers t ON c.teacher_id = t.user_id
+JOIN user_profiles up ON t.user_id = up.user_id
+LEFT JOIN course_enrollments ce ON c.course_id = ce.course_id
+WHERE c.is_deleted = FALSE
+GROUP BY c.course_id, c.title, up.full_name;
+\end{sqlcode}
+
+The view uses an outer join with \texttt{course\_enrollments} so that courses without enrollments can still appear in the analytics result. Aggregation functions are used to calculate the number of enrolled students and average progress. The average rating is calculated from the \texttt{user\_feedbacks} table by matching the feedback context with the course title. Although this approach is simple and suitable for the current schema, a future version of the database could improve this relationship by adding a direct \texttt{course\_id} column to feedback records.
+
+\begin{sqlcode}[caption={Testing the course analytics view},label={lst:test-course-analytics}]
+SELECT course_title, total_students, avg_rating
+FROM vw_course_analytics
+WHERE avg_rating >= 4.0
+  AND teacher_name = 'Nguyen Thi Lan';
+\end{sqlcode}
+
+Figure~\ref{fig:view-course-analytics-result} presents the result of the course analytics view. The output demonstrates that the database can aggregate course-level metrics such as total enrollment and average rating for reporting purposes.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.95\textwidth,height=0.55\textheight,keepaspectratio]{\detokenize{assets/images/VIEW2.png}}
+    \caption{Execution result of \texttt{vw\_course\_analytics}}
+    \label{fig:view-course-analytics-result}
+\end{figure}
+
+\subsection{Top Learners Leaderboard View}
+
+\textbf{Purpose.} The \texttt{vw\_top\_learners\_leaderboard} view supports the gamification component of the platform. It ranks students according to their learning streaks and achievement count, allowing the system to present a motivational leaderboard.
+
+\begin{sqlcode}[caption={Top learners leaderboard view},label={lst:view-top-learners-leaderboard}]
+CREATE OR REPLACE VIEW vw_top_learners_leaderboard AS
+SELECT
+    up.full_name,
+    up.avatar_url,
+    ss.current_streak,
+    ss.highest_streak,
+    (
+        SELECT COUNT(*)
+        FROM user_achievements ua
+        WHERE ua.user_id = s.user_id
+    ) AS total_achievements
+FROM students s
+JOIN user_profiles up ON s.user_id = up.user_id
+JOIN student_streaks ss ON s.user_id = ss.student_id
+ORDER BY ss.current_streak DESC, total_achievements DESC;
+\end{sqlcode}
+
+The view combines profile data, student records, streak information, and achievement counts. The ranking prioritizes the current streak and then the total number of achievements. This design encourages consistent learning activity while still recognizing long-term accomplishment.
+
+\begin{sqlcode}[caption={Testing the top learners leaderboard view},label={lst:test-top-learners-leaderboard}]
+SELECT full_name, current_streak, total_achievements
+FROM vw_top_learners_leaderboard
+ORDER BY current_streak DESC, total_achievements DESC
+LIMIT 5;
+\end{sqlcode}
+
+Figure~\ref{fig:view-top-learners-leaderboard-result} shows the leaderboard output. Students are ordered by their current streak and total number of achievements, which supports the gamification objective of encouraging consistent learning behavior.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.95\textwidth,height=0.55\textheight,keepaspectratio]{\detokenize{assets/images/VIEW3.png}}
+    \caption{Execution result of \texttt{vw\_top\_learners\_leaderboard}}
+    \label{fig:view-top-learners-leaderboard-result}
+\end{figure}
+
+\subsection{View Design Evaluation}
+
+The implemented views demonstrate three important database design goals. First, they hide join complexity from end users and report writers. Second, they provide reusable query definitions for progress reporting, course analytics, and gamification. Third, they help separate operational tables from reporting logic, making the report layer easier to maintain.
+
+From a performance perspective, these views depend on indexed foreign keys such as \texttt{student\_id}, \texttt{course\_id}, \texttt{teacher\_id}, and \texttt{user\_id}. For a larger deployment, these views could be further optimized through materialized views or additional indexes on reporting columns, especially if leaderboard and analytics queries are executed frequently.
+
+
+\section{Stored Procedures}
+\subsection{Student Enrollment Procedure}
+
+\textbf{Purpose.} The student enrollment procedure ensures that a student can be safely enrolled into a course while maintaining data integrity. It validates input parameters, checks the existence and validity of related entities, prevents duplicate enrollments, and records the operation for auditing purposes.
+
+\begin{sqlcode}[caption={Stored procedure for enrolling a student into a course},label={lst:procedure-enroll-student}]
+CREATE OR REPLACE PROCEDURE sp_enroll_student(
+    p_student_id UUID,
+    p_course_id UUID
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- Validate input parameters
+    IF p_student_id IS NULL OR p_course_id IS NULL THEN
+        RAISE EXCEPTION 'student_id and course_id must not be NULL';
+    END IF;
+
+    -- Check if the student exists and is not soft-deleted
+    IF NOT EXISTS (
+        SELECT 1 FROM students s
+        JOIN users u ON u.user_id = s.user_id
+        WHERE s.user_id = p_student_id AND u.is_deleted = FALSE
+    ) THEN
+        RAISE EXCEPTION 'Student does not exist or has been soft-deleted';
+    END IF;
+
+    -- Check if the course exists and is not soft-deleted
+    IF NOT EXISTS (
+        SELECT 1 FROM general_courses
+        WHERE course_id = p_course_id AND is_deleted = FALSE
+    ) THEN
+        RAISE EXCEPTION 'Course does not exist or has been soft-deleted';
+    END IF;
+
+    -- Insert enrollment record
+    INSERT INTO course_enrollments(student_id, course_id, progress)
+    VALUES (p_student_id, p_course_id, 0.00)
+    ON CONFLICT (student_id, course_id) DO NOTHING;
+
+    -- Detect duplicate enrollment
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Student is already enrolled in this course';
+    END IF;
+
+    -- Log the successful operation
+    INSERT INTO log(action)
+    VALUES (FORMAT('Enroll: student=%s, course=%s', p_student_id, p_course_id));
+END;
+$$;
+\end{sqlcode}
+
+The procedure begins by validating the input parameters to ensure that neither the student ID nor the course ID is NULL. This prevents invalid operations at an early stage.
+
+Next, it verifies that the student exists and has not been soft-deleted by joining the \texttt{students} and \texttt{users} tables and checking the \texttt{is\_deleted} flag. This guarantees that only active users can enroll.
+
+Similarly, the procedure checks whether the specified course exists and is not soft-deleted, ensuring that enrollments are only created for valid courses.
+
+The insertion step uses the \texttt{ON CONFLICT DO NOTHING} mechanism to prevent duplicate enrollments. If a duplicate attempt occurs, the procedure detects it using the \texttt{NOT FOUND} condition and raises an exception.
+
+Finally, the procedure logs the successful enrollment into the \texttt{log} table. This improves traceability and supports auditing.
+
+\begin{sqlcode}[caption={Testing student enrollment procedure},label={lst:test-procedure-enroll-student}]
+CALL sp_enroll_student(
+    '30000000-0000-0000-0000-000000000001',
+    '40000000-0000-0000-0000-000000000001'
+);
+\end{sqlcode}
+
+The expected result is a new row in \texttt{course\_enrollments} with \texttt{progress = 0.00}. If the student is already enrolled, the procedure raises an exception indicating a duplicate enrollment attempt. This confirms that the procedure correctly enforces data integrity and business rules.
+\subsection{Course Progress Update Procedure}
+
+\textbf{Purpose.} The course progress update procedure ensures that a student's learning progress in a specific course is updated accurately and within valid bounds. It validates input values, ensures the enrollment exists, and logs the operation for auditing.
+
+\begin{sqlcode}[caption={Stored procedure for updating course progress},label={lst:procedure-update-progress}]
+CREATE OR REPLACE PROCEDURE sp_update_course_progress(
+    p_student_id UUID,
+    p_course_id UUID,
+    p_progress NUMERIC
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- Validate progress range
+    IF p_progress < 0 OR p_progress > 100 THEN
+        RAISE EXCEPTION 'Progress must be between 0 and 100';
+    END IF;
+
+    -- Update enrollment progress
+    UPDATE course_enrollments
+    SET progress = ROUND(p_progress, 2)
+    WHERE student_id = p_student_id
+      AND course_id = p_course_id;
+
+    -- Check if enrollment exists
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Enrollment not found';
+    END IF;
+
+    -- Log the update action
+    INSERT INTO log(action)
+    VALUES (FORMAT('Update progress: student=%s course=%s progress=%s',
+                   p_student_id, p_course_id, p_progress));
+END;
+$$;
+\end{sqlcode}
+
+The procedure begins by validating the input progress value to ensure it lies within the acceptable range of 0 to 100. This prevents invalid or inconsistent progress data from being stored.
+
+Next, the procedure updates the \texttt{course\_enrollments} table by setting the student's progress for the specified course. The progress value is rounded to two decimal places to maintain consistency in numeric representation.
+
+After executing the update, the procedure checks whether any row was affected using the \texttt{NOT FOUND} condition. If no matching enrollment record exists, an exception is raised to notify the caller.
+
+Finally, the procedure logs the update operation into the \texttt{log} table. This provides traceability and supports auditing of user learning activities.
+
+\begin{sqlcode}[caption={Testing course progress update procedure},label={lst:test-procedure-update-progress}]
+CALL sp_update_course_progress(
+    '30000000-0000-0000-0000-000000000001',
+    '40000000-0000-0000-0000-000000000001',
+    75.5
+);
+\end{sqlcode}
+
+The expected result is that the corresponding record in \texttt{course\_enrollments} is updated with a progress value of \texttt{75.50}. If the enrollment does not exist, the procedure raises an exception, ensuring that only valid updates are applied.
+\subsection{User Soft Deletion Procedure}
+
+\textbf{Purpose.} The user soft deletion procedure is designed to deactivate a user account without permanently removing it from the database. This approach preserves historical data and maintains referential integrity while preventing the user from participating in the system.
+
+\begin{sqlcode}[caption={Stored procedure for soft deleting a user},label={lst:procedure-soft-delete-user}]
+CREATE OR REPLACE PROCEDURE sp_soft_delete_user(
+    p_user_id UUID
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- Mark user as deleted
+    UPDATE users
+    SET is_deleted = TRUE
+    WHERE user_id = p_user_id;
+
+    -- Check if user exists
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'User does not exist';
+    END IF;
+
+    -- Log the deletion action
+    INSERT INTO log(action)
+    VALUES (FORMAT('Soft delete user=%s', p_user_id));
+END;
+$$;
+\end{sqlcode}
+
+The procedure performs a soft delete by updating the \texttt{is\_deleted} flag instead of physically removing the user record. This ensures that related data such as enrollments, transactions, and logs remain intact.
+
+After executing the update, the procedure verifies whether any row was affected using the \texttt{NOT FOUND} condition. If no matching user is found, an exception is raised to notify the caller.
+
+Finally, the procedure logs the deletion action into the \texttt{log} table. This enables traceability and supports auditing of system operations.
+
+\begin{sqlcode}[caption={Testing user soft deletion procedure},label={lst:test-procedure-soft-delete-user}]
+CALL sp_soft_delete_user(
+    '30000000-0000-0000-0000-000000000001'
+);
+\end{sqlcode}
+
+The expected result is that the corresponding user record in the \texttt{users} table has \texttt{is\_deleted = TRUE}. If the user does not exist, the procedure raises an exception, ensuring that only valid operations are performed.
+\subsection{Course Soft Deletion Procedure}
+
+\textbf{Purpose.} The course soft deletion procedure is designed to deactivate a course without permanently removing it from the database. This approach preserves historical data such as enrollments and learning progress while preventing the course from being accessed or modified.
+
+\begin{sqlcode}[caption={Stored procedure for soft deleting a course},label={lst:procedure-soft-delete-course}]
+CREATE OR REPLACE PROCEDURE sp_soft_delete_course(
+    p_course_id UUID
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- Mark course as deleted
+    UPDATE general_courses
+    SET is_deleted = TRUE
+    WHERE course_id = p_course_id;
+
+    -- Check if course exists
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Course does not exist';
+    END IF;
+
+    -- Log the deletion action
+    INSERT INTO log(action)
+    VALUES (FORMAT('Soft delete course=%s', p_course_id));
+END;
+$$;
+\end{sqlcode}
+
+The procedure performs a soft delete by updating the \texttt{is\_deleted} flag instead of physically removing the course record. This ensures that related data such as enrollments, lessons, and progress tracking remain consistent and accessible for historical purposes.
+
+After executing the update, the procedure verifies whether any row was affected using the \texttt{NOT FOUND} condition. If no matching course is found, an exception is raised to notify the caller.
+
+Finally, the procedure logs the deletion action into the \texttt{log} table. This enhances traceability and supports auditing of system operations.
+
+\begin{sqlcode}[caption={Testing course soft deletion procedure},label={lst:test-procedure-soft-delete-course}]
+CALL sp_soft_delete_course(
+    '40000000-0000-0000-0000-000000000001'
+);
+\end{sqlcode}
+
+The expected result is that the corresponding record in the \texttt{general\_courses} table has \texttt{is\_deleted = TRUE}. If the course does not exist, the procedure raises an exception, ensuring that only valid operations are executed.
+\section{Triggers}
+
+Triggers are used to enforce database-side automation and integrity rules. In this project, triggers reduce the need for application code to manually maintain derived or administrative data. They are especially suitable for tasks that must always happen when specific database events occur, such as updating modification timestamps, initializing student streak records, and preventing invalid course publication.
+
+The current implementation includes three trigger scenarios: automatic timestamp maintenance, automatic streak initialization for new students, and validation before publishing a course.
+
+\subsection{Automatic Timestamp Update Trigger}
+
+\textbf{Purpose.} The automatic timestamp trigger updates the \texttt{updated\_at} column whenever selected records are modified. This provides a reliable audit field for tracking when important entities were last changed.
+
+\begin{sqlcode}[caption={Trigger function for automatic timestamp maintenance},label={lst:trigger-update-timestamp-function}]
+CREATE OR REPLACE FUNCTION fn_update_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+\end{sqlcode}
+
+The trigger function modifies the \texttt{NEW} record before it is written to the table. Because this logic runs inside the database, every update operation receives the same timestamp behavior regardless of whether the update comes from an application, an administrator query, or a stored procedure.
+
+\begin{sqlcode}[caption={Timestamp triggers for users and general courses},label={lst:trigger-update-timestamp-attach}]
+CREATE TRIGGER trg_users_update_timestamp
+BEFORE UPDATE ON users
+FOR EACH ROW
+EXECUTE FUNCTION fn_update_timestamp();
+
+CREATE TRIGGER trg_courses_update_timestamp
+BEFORE UPDATE ON general_courses
+FOR EACH ROW
+EXECUTE FUNCTION fn_update_timestamp();
+\end{sqlcode}
+
+The trigger is attached to both \texttt{users} and \texttt{general\_courses}, because these tables contain an \texttt{updated\_at} column and represent entities whose modification history is important. The trigger is defined as a \texttt{BEFORE UPDATE} trigger so the timestamp can be changed before the updated row is stored.
+
+\begin{sqlcode}[caption={Testing automatic timestamp update on users},label={lst:test-trigger-update-timestamp}]
+SELECT user_id, username, updated_at
+FROM users
+WHERE user_id = '30000000-0000-0000-0000-000000000001';
+
+UPDATE users
+SET username = 'student_minh_pro'
+WHERE user_id = '30000000-0000-0000-0000-000000000001';
+
+SELECT user_id, username, updated_at
+FROM users
+WHERE user_id = '30000000-0000-0000-0000-000000000001';
+\end{sqlcode}
+
+The expected result is that the second query returns a newer \texttt{updated\_at} value after the \texttt{UPDATE} statement is executed.
+
+Figure~\ref{fig:trigger-updated-at-comparison} compares the value of \texttt{updated\_at} before and after modifying the username. The two screenshots demonstrate that the trigger automatically changes the timestamp when the row is updated.
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[t]{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth,height=0.32\textheight,keepaspectratio]{\detokenize{assets/images/TRIGGER1_01.png}}
+        \caption{Before the final update operation}
+        \label{fig:trigger-updated-at-before}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth,height=0.32\textheight,keepaspectratio]{\detokenize{assets/images/TRIGGER1_02.png}}
+        \caption{After the update operation}
+        \label{fig:trigger-updated-at-after}
+    \end{subfigure}
+    \caption{Automatic update of \texttt{updated\_at} through the timestamp trigger}
+    \label{fig:trigger-updated-at-comparison}
+\end{figure}
+
+\subsection{Student Streak Initialization Trigger}
+
+\textbf{Purpose.} The student streak initialization trigger ensures that every new student automatically receives a corresponding record in \texttt{student\_streaks}. This prevents missing streak data and simplifies later gamification logic.
+
+\begin{sqlcode}[caption={Trigger function for initializing student streaks},label={lst:trigger-init-student-streak-function}]
+CREATE OR REPLACE FUNCTION fn_init_student_streak()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO student_streaks (
+        student_id,
+        current_streak,
+        highest_streak,
+        last_activity_date
+    )
+    VALUES (NEW.user_id, 0, 0, NULL);
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+\end{sqlcode}
+
+This function inserts a default streak record immediately after a student record is created. The initial current streak and highest streak are both set to zero, while \texttt{last\_activity\_date} remains \texttt{NULL} until the student performs a learning activity.
+
+\begin{sqlcode}[caption={Trigger attachment for student streak initialization},label={lst:trigger-init-student-streak-attach}]
+DROP TRIGGER IF EXISTS trg_after_insert_student ON students;
+
+CREATE TRIGGER trg_after_insert_student
+AFTER INSERT ON students
+FOR EACH ROW
+EXECUTE FUNCTION fn_init_student_streak();
+\end{sqlcode}
+
+The trigger is defined as an \texttt{AFTER INSERT} trigger because the student record must already exist before the related streak record can reference it through the foreign key.
+
+\begin{sqlcode}[caption={Testing automatic streak initialization},label={lst:test-trigger-init-student-streak}]
+INSERT INTO users (user_id, username, password_hash, email, role_id)
+VALUES (
+    '30000000-0000-0000-0000-000000000599',
+    'demo_new_user_01',
+    'hash123',
+    'newuser@local_01',
+    (SELECT role_id FROM roles WHERE role_name = 'STUDENT')
+);
+
+INSERT INTO students (user_id, grade_level, school_name)
+VALUES (
+    '30000000-0000-0000-0000-000000000599',
+    'Grade 10',
+    'Demo High School'
+);
+
+SELECT student_id, current_streak, highest_streak, last_activity_date
+FROM student_streaks
+WHERE student_id = '30000000-0000-0000-0000-000000000599';
+\end{sqlcode}
+
+The expected result is a new row in \texttt{student\_streaks} with \texttt{current\_streak = 0}, \texttt{highest\_streak = 0}, and \texttt{last\_activity\_date = NULL}. This confirms that the trigger automatically creates the required gamification record.
+
+Figure~\ref{fig:trigger-streak-init-comparison} shows the test process for the student streak trigger. Before inserting into \texttt{students}, no streak record exists for the new account. After the student record is inserted, the database automatically creates a related streak row with initial values.
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[t]{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth,height=0.34\textheight,keepaspectratio]{\detokenize{assets/images/TRIGGER2_01.png}}
+        \caption{Before inserting the student subtype record}
+        \label{fig:trigger-streak-before}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth,height=0.34\textheight,keepaspectratio]{\detokenize{assets/images/TRIGGER2_02.png}}
+        \caption{After the trigger creates the streak record}
+        \label{fig:trigger-streak-after}
+    \end{subfigure}
+    \caption{Automatic initialization of \texttt{student\_streaks} for a new student}
+    \label{fig:trigger-streak-init-comparison}
+\end{figure}
+
+\subsection{Course Publishing Validation Trigger}
+
+\textbf{Purpose.} The course publishing validation trigger prevents an incomplete course from being published. In the current implementation, a course cannot be changed to \texttt{PUBLISHED} unless it contains at least one module. This rule protects students from seeing empty courses in the public catalog.
+
+\begin{sqlcode}[caption={Trigger function for validating course publication},label={lst:trigger-validate-course-publish-function}]
+CREATE OR REPLACE FUNCTION fn_validate_course_publish()
+RETURNS TRIGGER AS $$
+DECLARE
+    module_count INT;
+BEGIN
+    IF NEW.visibility_status = 'PUBLISHED'
+       AND OLD.visibility_status != 'PUBLISHED' THEN
+
+        SELECT COUNT(*) INTO module_count
+        FROM general_course_modules
+        WHERE course_id = NEW.course_id;
+
+        IF module_count = 0 THEN
+            RAISE EXCEPTION
+                'Cannot publish course "%" because it has no module.',
+                NEW.title;
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+\end{sqlcode}
+
+The trigger only performs validation when the course status changes from a non-published state to \texttt{PUBLISHED}. This avoids unnecessary validation for unrelated updates. If the course has no modules, the trigger raises an exception and the update is rejected.
+
+\begin{sqlcode}[caption={Trigger attachment for course publishing validation},label={lst:trigger-validate-course-publish-attach}]
+DROP TRIGGER IF EXISTS trg_before_publish_course ON general_courses;
+
+CREATE TRIGGER trg_before_publish_course
+BEFORE UPDATE ON general_courses
+FOR EACH ROW
+EXECUTE FUNCTION fn_validate_course_publish();
+\end{sqlcode}
+
+A \texttt{BEFORE UPDATE} trigger is appropriate because the invalid status change must be blocked before the row is saved.
+
+\begin{sqlcode}[caption={Testing course publishing validation},label={lst:test-trigger-validate-course-publish}]
+INSERT INTO general_courses (
+    course_id,
+    teacher_id,
+    category_id,
+    title,
+    visibility_status
+)
+VALUES (
+    '40000000-0000-0000-0000-000000000678',
+    '20000000-0000-0000-0000-000000000001',
+    1,
+    'Trigger Test Course',
+    'DRAFT'
+);
+
+-- This update is expected to fail because the course has no module.
+UPDATE general_courses
+SET visibility_status = 'PUBLISHED'
+WHERE course_id = '40000000-0000-0000-0000-000000000678';
+
+INSERT INTO general_course_modules (
+    module_id,
+    course_id,
+    title,
+    order_index
+)
+VALUES (
+    '41000000-0000-0000-0000-000000000999',
+    '40000000-0000-0000-0000-000000000678',
+    'Module 1: Introduction',
+    1
+);
+
+-- This update is expected to succeed after adding a module.
+UPDATE general_courses
+SET visibility_status = 'PUBLISHED'
+WHERE course_id = '40000000-0000-0000-0000-000000000678';
+\end{sqlcode}
+
+The first update demonstrates the failure case, while the second update demonstrates the valid case after the required module has been inserted.
+
+Figure~\ref{fig:trigger-course-publish-comparison} shows the two stages of this validation. The first screenshot captures the business-rule violation where the database rejects publishing an empty course. The second screenshot shows the successful result after a module has been added and the course status is updated to \texttt{PUBLISHED}.
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[t]{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth,height=0.34\textheight,keepaspectratio]{\detokenize{assets/images/TRIGGER3_01.png}}
+        \caption{Rejected publication attempt for an empty course}
+        \label{fig:trigger-course-publish-error}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.48\textwidth}
+        \centering
+        \includegraphics[width=\textwidth,height=0.34\textheight,keepaspectratio]{\detokenize{assets/images/TRIGGER3_02.png}}
+        \caption{Successful publication after inserting a module}
+        \label{fig:trigger-course-publish-success}
+    \end{subfigure}
+    \caption{Validation behavior of the course publishing trigger}
+    \label{fig:trigger-course-publish-comparison}
+\end{figure}
+
+\subsection{Trigger Design Evaluation}
+
+The trigger implementation demonstrates how database-side automation can protect consistency independently of application code. The timestamp trigger maintains audit metadata, the student streak trigger guarantees that gamification records are initialized, and the publishing trigger enforces an important business rule before courses become visible to learners.
+
+These triggers are intentionally simple and focused. They do not replace application-level validation, but they provide a final layer of protection inside the database. This is important in a multi-user system because data may be modified through different entry points, including backend services, administrative tools, and direct SQL scripts.
+
+\section{Transactions}
+\subsection{Seed Data Loading Transaction}
+
+\textbf{Purpose.} The seed data loading transaction is used to populate the database with consistent demonstration data after the schema has been created. This transaction reflects the actual data-loading workflow used by the project and ensures that related records across users, profiles, students, teachers, courses, enrollments, achievements, feedback, and notifications are inserted as one logical unit.
+
+\begin{sqlcode}[caption={Transaction wrapper used by the seed data script},label={lst:transaction-seed-data-wrapper}]
+BEGIN;
+
+INSERT INTO roles (role_name)
+VALUES ('ADMIN'), ('TEACHER'), ('STUDENT')
+ON CONFLICT (role_name) DO NOTHING;
+
+INSERT INTO course_enrollments (
+    enrollment_id,
+    student_id,
+    course_id,
+    progress,
+    enrolled_at
+)
+VALUES (
+    '55000000-0000-0000-0000-000000000001',
+    '30000000-0000-0000-0000-000000000001',
+    '40000000-0000-0000-0000-000000000001',
+    100.00,
+    CURRENT_TIMESTAMP - INTERVAL '18 days'
+)
+ON CONFLICT (student_id, course_id) DO UPDATE
+SET progress = EXCLUDED.progress,
+    enrolled_at = EXCLUDED.enrolled_at;
+
+COMMIT;
+\end{sqlcode}
+
+The complete data-loading script begins with \texttt{BEGIN} and ends with \texttt{COMMIT}. Therefore, if a critical insertion fails before the commit point, PostgreSQL can reject the transaction and prevent the database from being left in a partially populated state. This is important because many seed records are connected through foreign keys. For example, users must exist before their profiles, students, teachers, enrollments, achievements, feedback, and notifications can be inserted.
+
+The use of \texttt{ON CONFLICT} also makes the script safer to execute more than once during testing. Instead of creating duplicate rows, PostgreSQL either ignores existing unique values or updates the existing row with the latest demonstration data. This approach supports repeated setup and verification while preserving relational consistency.
+
+From a DBMS perspective, this transaction demonstrates atomicity and consistency in the deployment workflow. It is not merely a collection of independent insert statements; it is a controlled initialization process that prepares a valid database state for testing views, triggers, stored procedures, and application demonstrations.
+
+\section{Deployment Notes}
+This section will document the steps required to create the database, execute scripts, load sample data, and verify the implementation.

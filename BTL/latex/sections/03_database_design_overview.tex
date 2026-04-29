@@ -1,0 +1,148 @@
+\chapter{Database Design Overview}
+
+\section{System Overview}
+
+The Vietnamese Sign Language Online Education System is designed as a relational database system that supports dictionary lookup, structured online courses, microlearning activities, user management, and learning engagement features. From a database perspective, the system must store both relatively static educational content, such as dictionary entries and course materials, and dynamic learner-generated data, such as enrollments, progress, comments, streaks, feedback, and notifications.
+
+The database design follows a modular structure. Each module is responsible for a distinct functional area, while shared entities such as \texttt{users}, \texttt{students}, and \texttt{teachers} provide integration across the whole system. This approach improves maintainability because each group of tables has a clear responsibility, and it also supports future extension of the platform without forcing major changes to unrelated modules.
+
+The schema uses PostgreSQL data types and constraints to improve data integrity. Universally Unique Identifiers are used for most business entities, while identity integers are used for small reference tables such as roles, categories, and achievements. Foreign key constraints define the relationships between entities, unique constraints prevent duplicated business records, and check constraints restrict invalid values such as negative progress or unsupported course statuses.
+
+\section{Entity Relationship Diagram}
+
+Figure~\ref{fig:erd-system} presents the Entity Relationship Diagram (ERD) of the database. The diagram shows the main base tables, their primary keys, foreign keys, and relationships. It also includes several derived reporting views at the bottom of the diagram; these views are not independent data storage tables, but are used to simplify analytical queries and report generation.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth,height=0.78\textheight,keepaspectratio]{\detokenize{assets/images/ERD Diagram.png}}
+    \caption{Entity Relationship Diagram of the Vietnamese Sign Language Online Education System}
+    \label{fig:erd-system}
+\end{figure}
+
+The ERD shows that \texttt{users} is the central entity of the system. A user belongs to a role, may have one profile, and may be extended into either a student or teacher subtype depending on the account role. Students participate in courses through enrollments, maintain learning streaks, receive achievements, submit feedback, and receive notifications. Teachers are linked to the courses they create and manage. Educational content is separated into dictionary content, general course content, and microlearning content.
+
+\section{Database Module Summary}
+
+Table~\ref{tab:database-modules} summarizes the major modules of the database and their responsibilities.
+
+\begin{table}[H]
+    \centering
+    \caption{Summary of database modules}
+    \label{tab:database-modules}
+    \small
+    \begin{tabular}{p{3.2cm}p{5.4cm}p{5.4cm}}
+        \toprule
+        \textbf{Module} & \textbf{Main Tables} & \textbf{Responsibility} \\
+        \midrule
+        User Management & \path{roles}, \path{users}, \path{user_profiles}, \path{students}, \path{teachers}, \path{authentication_sessions} & Stores account identities, role information, user profiles, student and teacher subtype data, and login sessions. \\
+        Dictionary & \path{dictionary_categories}, \path{dictionary_entries}, \path{dictionary_variations} & Stores Vietnamese sign language vocabulary, meanings, categories, and regional video variations. \\
+        General Course & \path{general_course_categories}, \path{general_courses}, \path{general_course_modules}, \path{general_course_lessons}, \path{learning_materials}, \path{course_enrollments}, \path{comments} & Supports structured courses, hierarchical lessons, learning materials, enrollments, progress tracking, and discussion. \\
+        Microlearning & \path{microlearning_topics}, \path{microlearning_units}, \path{microlearning_lessons}, \path{microlearning_lesson_parts}, \path{microlearning_questions} & Supports short learning activities and quiz-based learning content. \\
+        Gamification and Engagement & \path{student_streaks}, \path{achievements}, \path{user_achievements}, \path{user_feedbacks}, \path{notification_users} & Stores learner engagement data such as streaks, achievements, feedback, and notifications. \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\section{User Management Module}
+
+The User Management module provides the identity foundation for the whole platform. It separates general account data from role-specific data, which makes the schema more normalized and avoids storing unrelated attributes in a single user table. Figure~\ref{fig:user-management-module} shows the main user-centered relationships used by the system.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.78\textwidth,height=0.78\textheight,keepaspectratio]{\detokenize{assets/images/User Management.png}}
+    \caption{User management and user-related relationship diagram}
+    \label{fig:user-management-module}
+\end{figure}
+
+The \texttt{roles} table defines system-level roles such as administrator, teacher, and student. Each role has a unique \texttt{role\_name}, and the \texttt{users} table references it through \texttt{role\_id}. The foreign key uses restrictive deletion behavior so that a role cannot be removed while user accounts still depend on it. This protects the consistency of access-control logic.
+
+The \texttt{users} table stores core authentication and account information, including username, password hash, email address, role, timestamps, and soft-deletion status. The \texttt{is\_deleted} column allows the system to deactivate a user without physically removing related historical records. This design is suitable for educational systems because learning records, comments, enrollments, and achievements may still be required for auditing or reporting.
+
+The \texttt{user\_profiles} table stores personal information such as full name, avatar URL, phone number, and date of birth. It has a one-to-one relationship with \texttt{users}, enforced by the unique constraint on \texttt{user\_id}. Separating profile data from authentication data improves clarity and keeps sensitive login information separate from display-oriented information.
+
+The \texttt{students} and \texttt{teachers} tables implement role-specific subtypes. A student may have attributes such as grade level and school name, while a teacher may have a biography and department. Both tables use \texttt{user\_id} as their primary key and foreign key to \texttt{users}. This pattern ensures that every student or teacher record must correspond to a valid user account.
+
+The \texttt{authentication\_sessions} table stores active login sessions and optional OTP codes. The table includes an expiration timestamp and a check constraint to ensure that \texttt{expires\_at} is later than \texttt{created\_at}. This prevents invalid session lifetimes at the database level.
+
+\section{Dictionary Module}
+
+The Dictionary module stores sign language vocabulary and supports regional variation, which is important because signs may differ by region, context, or teaching standard. The design separates a dictionary word from its video representations, allowing one word to have multiple sign variations. Figure~\ref{fig:dictionary-module} illustrates this three-table structure.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.88\textwidth,height=0.38\textheight,keepaspectratio]{\detokenize{assets/images/dictionary_diagram.png}}
+    \caption{Dictionary module relationship diagram}
+    \label{fig:dictionary-module}
+\end{figure}
+
+The \texttt{dictionary\_categories} table classifies vocabulary into groups such as greetings, family, education, health, or daily activities. The \texttt{name} column is unique to prevent duplicated categories.
+
+The \texttt{dictionary\_entries} table stores the main dictionary item. Each entry belongs to exactly one category and contains the word, its meaning, update timestamp, and soft-deletion flag. The unique constraint on \texttt{category\_id} and \texttt{word} ensures that the same word cannot be duplicated inside the same category. This allows the same term to appear in different semantic categories only when the design intentionally permits it.
+
+The \texttt{dictionary\_variations} table stores video-based sign variations for each dictionary entry. It includes region, video URL, and description. The unique constraint on \texttt{entry\_id} and \texttt{video\_url} prevents the same video from being registered more than once for a dictionary entry. The relationship from \texttt{dictionary\_variations} to \texttt{dictionary\_entries} uses cascading deletion, which is appropriate because a variation has no independent meaning without its parent dictionary entry.
+
+\section{General Course Module}
+
+The General Course module supports structured learning content. It models courses as a hierarchy from category to course, module, lesson, and learning material. This hierarchy is suitable for long-form courses where students follow a planned learning path. Figure~\ref{fig:general-course-module} focuses on the main course-content hierarchy.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.96\textwidth,height=0.42\textheight,keepaspectratio]{\detokenize{assets/images/General Course.png}}
+    \caption{General course module relationship diagram}
+    \label{fig:general-course-module}
+\end{figure}
+
+The \texttt{general\_course\_categories} table groups courses by subject area or learning level. The \texttt{general\_courses} table stores course metadata such as teacher, category, title, description, visibility status, update timestamp, and soft-deletion flag. A course must reference a valid teacher through \texttt{teacher\_id}, ensuring that every course has an accountable instructor. The \texttt{visibility\_status} column is restricted to \texttt{DRAFT}, \texttt{PUBLISHED}, or \texttt{ARCHIVED}, which supports a controlled publishing workflow.
+
+The \texttt{general\_course\_modules} table divides a course into ordered modules. The \texttt{order\_index} column must be positive, and the unique constraint on \texttt{course\_id} and \texttt{order\_index} prevents two modules in the same course from having the same position. This maintains a deterministic learning sequence.
+
+The \texttt{general\_course\_lessons} table further divides modules into ordered lessons. It follows the same ordering strategy as modules, using a positive \texttt{order\_index} and a uniqueness rule within each module. The \texttt{learning\_materials} table stores lesson resources such as video URLs and optional transcripts in \texttt{JSONB} format. Using \texttt{JSONB} for transcripts gives flexibility for structured captions, timestamps, or sign annotations without adding many specialized columns.
+
+The \texttt{course\_enrollments} table represents the many-to-many relationship between students and courses. Each enrollment stores progress as a percentage from 0 to 100\%, and the unique constraint on \texttt{student\_id} and \texttt{course\_id} prevents duplicate enrollment records for the same student and course. The \texttt{comments} table allows users to discuss specific lessons and provides timestamped interaction data.
+
+\section{Microlearning Module}
+
+The Microlearning module supports short and focused learning activities. Unlike the General Course module, which is designed for longer structured courses, microlearning content is organized into compact topics, units, lessons, lesson parts, and questions. Figure~\ref{fig:microlearning-module} shows the sequential structure of the microlearning content model.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.96\textwidth,height=0.42\textheight,keepaspectratio]{\detokenize{assets/images/microlearning_diagram.png}}
+    \caption{Microlearning module relationship diagram}
+    \label{fig:microlearning-module}
+\end{figure}
+
+The \texttt{microlearning\_topics} table represents broad learning themes. Each topic contains multiple \texttt{microlearning\_units}, and each unit contains multiple \texttt{microlearning\_lessons}. Both units and lessons use \texttt{order\_index} columns to preserve the intended learning sequence.
+
+The \texttt{microlearning\_lesson\_parts} table breaks a lesson into smaller content blocks. The \texttt{part\_type} column can be used to distinguish between explanation, practice, quiz, or other activity types. Each part has a positive order index and is unique within its parent lesson.
+
+The \texttt{microlearning\_questions} table stores quiz questions associated with lesson parts. It includes the question text, question type, answer options in \texttt{JSONB}, and the correct answer. The use of \texttt{JSONB} for \texttt{options\_json} allows the system to represent different question formats while keeping the relational structure simple.
+
+\section{Gamification and Engagement Module}
+
+The Gamification and Engagement module records learner motivation and communication features. These tables are not the core educational content, but they are essential for increasing student retention and supporting interaction with the platform.
+
+The \texttt{student\_streaks} table stores each student's current streak, highest streak, and last activity date. The table enforces non-negative streak values and ensures that the highest streak is always greater than or equal to the current streak. The unique constraint on \texttt{student\_id} guarantees that each student has only one streak record.
+
+The \texttt{achievements} table defines available achievements, including title, description, and icon URL. The \texttt{user\_achievements} table links users to achievements they have earned. Its composite primary key on \texttt{user\_id} and \texttt{achievement\_id} prevents duplicate achievement awards.
+
+The \texttt{user\_feedbacks} table stores user ratings and textual feedback. The rating column is optional, but when provided, it must be between 1 and 5. This constraint prevents invalid feedback scores and supports reliable evaluation statistics.
+
+The \texttt{notification\_users} table stores notifications sent to users. It includes the notification title, message, read status, and creation timestamp. This table can support system messages such as successful enrollment notifications, course publication announcements, achievement messages, or administrative alerts.
+
+\section{Relationship and Integrity Design}
+
+The schema uses several integrity mechanisms to reduce inconsistent data. Primary keys uniquely identify each record, while foreign keys preserve referential integrity across modules. Cascading delete is used when child records depend entirely on the parent record, such as course modules under a course or dictionary variations under a dictionary entry. Restrictive deletion is used for reference or ownership relationships where deleting a parent could damage important historical or administrative data.
+
+Unique constraints are used for important business rules. For example, usernames and role names must be unique, each student can enroll in the same course only once, and ordered course modules cannot share the same order index inside a course. Check constraints are used to validate bounded values such as enrollment progress, feedback ratings, streak counts, and course visibility status.
+
+Indexes are defined on frequently joined or filtered columns, especially foreign keys and soft-deletion flags. This improves query performance for common operations such as listing courses by teacher, retrieving lessons by module, finding enrollments by student, and filtering active records.
+
+\section{Design Rationale}
+
+The overall database design follows normalization principles while still supporting practical application requirements. User identity, profile information, educational content, progress data, and engagement data are stored in separate but connected tables. This reduces redundancy and makes the schema easier to maintain.
+
+The use of UUID primary keys for major entities supports distributed application development and avoids exposing predictable sequential identifiers for user-facing records. Identity integer keys are still used for compact reference tables where sequential identifiers are simple and efficient.
+
+Soft deletion is used for important entities such as users, dictionary entries, and courses. This approach supports data recovery, auditability, and historical reporting. At the same time, child records use cascading deletion where their lifecycle is strictly dependent on the parent entity.
+
+In summary, the database schema provides a structured foundation for an online Vietnamese sign language learning platform. It supports core academic content, learner progress, dictionary lookup, microlearning, and engagement features while maintaining consistency through relational constraints and PostgreSQL-specific capabilities.

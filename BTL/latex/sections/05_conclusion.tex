@@ -1,0 +1,57 @@
+\chapter{Conclusion}
+
+\section{Summary}
+
+This project designed and implemented a relational database system for a Vietnamese Sign Language Online Education System. The database was developed to support the main data requirements of an educational platform, including user management, sign language dictionary content, structured courses, microlearning activities, learner progress, feedback, notifications, and gamification. Instead of treating these features as isolated data groups, the project organized them into a connected relational schema with clear primary keys, foreign keys, constraints, and indexes.
+
+The final schema consists of multiple functional modules. The User Management module stores account, role, profile, student, teacher, and authentication session data. The Dictionary module manages vocabulary entries and regional video variations. The General Course module supports courses, modules, lessons, learning materials, enrollments, and comments. The Microlearning module provides a compact structure for short learning activities and quiz questions. The Gamification and Engagement module stores streaks, achievements, feedback, and user notifications.
+
+The implementation also demonstrates important DBMS mechanisms beyond basic table creation. Views were created to support reporting and analytics, including student progress reporting, course analytics, and learner leaderboard generation. Triggers were implemented to automate timestamp maintenance, initialize student streak records, and prevent invalid course publication. These mechanisms show how database-side logic can improve consistency, reduce duplicated application logic, and enforce business rules directly at the data layer.
+
+Overall, the project provides a complete academic demonstration of database design and implementation for a realistic online learning scenario. It shows how a normalized relational database can support both operational workflows and reporting needs while preserving data integrity through PostgreSQL features.
+
+\section{Key Achievements}
+
+The project achieved several important technical outcomes.
+
+First, the database schema was normalized into clear functional modules. This organization reduces data redundancy and improves maintainability. Each table has a specific responsibility, and relationships between tables are expressed through explicit foreign key constraints.
+
+Second, the schema applies strong integrity rules. Primary keys uniquely identify records, foreign keys protect relationships, unique constraints prevent duplicated business data, and check constraints restrict invalid values such as out-of-range progress percentages, invalid feedback ratings, unsupported course statuses, and inconsistent streak values.
+
+Third, the implementation uses appropriate PostgreSQL data types and features. UUID identifiers are used for major business entities, identity columns are used for compact reference tables, timestamp fields support auditability, and JSONB fields provide flexibility for transcripts and question options. This combination keeps the database relational while still allowing selected semi-structured data where it is useful.
+
+Fourth, the project implemented reusable reporting views. The student progress report view simplifies learning-status queries, the course analytics view summarizes course performance, and the leaderboard view supports gamification. These views make the database easier to query and demonstrate how virtual tables can be used as a reporting layer.
+
+Fifth, the trigger implementation demonstrates database automation. The timestamp trigger automatically updates modification metadata, the student streak trigger creates required gamification records for new students, and the course publishing trigger blocks invalid publication of empty courses. These examples show how business rules can be enforced consistently even when data is modified through different entry points.
+
+Finally, the project includes a report structure and visual evidence such as ERD diagrams, module diagrams, SQL implementation fragments, and execution screenshots. These materials help demonstrate not only the final database design but also the reasoning and verification process behind the implementation.
+
+\section{Challenges and Lessons Learned}
+
+Several challenges were encountered during the project.
+
+The first challenge was designing a schema that is sufficiently detailed for an educational platform while remaining understandable for an academic database project. The platform contains many concepts, including users, roles, dictionary entries, courses, lessons, materials, enrollments, comments, microlearning content, streaks, achievements, feedback, and notifications. Separating these concepts into modules helped control complexity and made the schema easier to explain.
+
+The second challenge was choosing appropriate relationship actions. Some child records should be removed when their parent is deleted, such as course modules under a course or variations under a dictionary entry. Other relationships require restrictive behavior to protect historical or administrative consistency, such as courses referencing teachers or users referencing roles. This required careful interpretation of the business meaning of each relationship.
+
+The third challenge was balancing normalization and practical reporting. A normalized schema is good for consistency, but reporting queries often require multiple joins. Views helped solve this problem by presenting joined and aggregated data in a reusable form. This showed the practical value of views as a bridge between normalized storage and convenient reporting.
+
+The fourth challenge was implementing database-side business logic without making triggers too complex. Triggers are powerful, but overly complicated triggers can make systems difficult to debug. Therefore, the project used focused triggers for clear scenarios: timestamp maintenance, streak initialization, and course publishing validation.
+
+The final lesson is that database design is not only about creating tables. A complete database system also requires constraints, indexes, views, triggers, testing data, and clear documentation. The project helped reinforce the role of the database as an active component that protects data quality and supports application behavior.
+
+\section{Future Work}
+
+Although the implemented database satisfies the core academic requirements of the project, several improvements could be developed in future versions.
+
+First, the system could add a dedicated lesson-completion table. The current schema stores course progress as a percentage in \texttt{course\_enrollments}, but detailed per-lesson completion records would allow more accurate progress calculation, learning history tracking, and analytics.
+
+Second, feedback could be linked more directly to courses, lessons, or dictionary entries. The current implementation uses a general feedback context field, which is flexible but less strict than a foreign key relationship. Adding optional foreign keys such as \texttt{course\_id} or \texttt{lesson\_id} would improve reporting accuracy.
+
+Third, the security model could be expanded with database roles, grants, and Row-Level Security policies. This would allow students, teachers, and administrators to access only the data appropriate to their responsibilities.
+
+Fourth, the platform could introduce materialized views for expensive reporting queries. If the number of users, enrollments, feedback records, and achievements grows significantly, materialized views may improve performance for dashboards and leaderboard pages.
+
+Fifth, the multimedia data model could be extended. Since sign language education depends heavily on video, future work could include richer metadata for video quality, duration, captions, regional classification, and accessibility annotations.
+
+Finally, the database could be integrated with a more complete web application and tested under larger datasets. This would allow evaluation of performance, concurrency, transaction behavior, and real user workflows beyond the scope of the current academic prototype.

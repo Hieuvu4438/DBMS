@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<diagram version="1" name="dictionary_diagram">
+	<entities>
+		<data-source id="postgres-jdbc-19dab83110b-31204040d85ec8e8">
+			<entity id="1" name="dictionary_categories" fq-name="public.dictionary_categories">
+				<path name="public"/>
+				<path name="postgres"/>
+			</entity>
+			<entity id="2" name="dictionary_entries" fq-name="public.dictionary_entries">
+				<path name="public"/>
+				<path name="postgres"/>
+			</entity>
+			<entity id="3" name="dictionary_variations" fq-name="public.dictionary_variations">
+				<path name="public"/>
+				<path name="postgres"/>
+			</entity>
+		</data-source>
+	</entities>
+	<relations>
+		<relation name="fk_dict_entries_category" fq-name="public.dictionary_entries.fk_dict_entries_category" type="fk" pk-ref="1" fk-ref="2"/>
+		<relation name="fk_dict_variations_entry" fq-name="public.dictionary_variations.fk_dict_variations_entry" type="fk" pk-ref="2" fk-ref="3"/>
+	</relations>
+</diagram>
